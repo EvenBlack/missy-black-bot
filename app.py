@@ -10,6 +10,7 @@ from aiogram.types import FSInputFile
 from google import genai
 from gtts import gTTS
 from pydub import AudioSegment
+from aiohttp import web  # <--- Додали бібліотеку для вебсерверу
 
 TELEGRAM_TOKEN = "9159735497:AAGsU-6WA2YHPXjN7mQLjmGR42Imnfg5lvk"
 os.environ["GEMINI_API_KEY"] = "AQ.Ab8RN6Lc9DY9gi2wNtRDtONn96JS5wQ0_enLEIhozel-omPP9A"
@@ -175,8 +176,21 @@ async def handle_message(message: types.Message):
     except Exception as e:
         await message.answer("Стався збій системи.")
 
+# Функція вебсерверу для задоволення вимог Render до портів
+async def handle_health(request):
+    return web.Response(text="Missy is online 24/7!")
+
 async def main():
-    print("МІССІ ЗАПУЩЕНА НА RENDER 24/7...")
+    # Запускаємо асинхронний мінівебсервер на порту Render
+    app = web.Application()
+    app.router.add_get('/', handle_health)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    
+    print(f"МІССІ ЗАПУЩЕНА НА RENDER 24/7 НА ПОРТУ {port}...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
