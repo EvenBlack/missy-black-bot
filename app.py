@@ -81,6 +81,7 @@ class UltimateSecureMissy:
         clean_message = self.sanitize_input(user_message)
         context_prompt = f"{SYSTEM_PROMPT}\n{role_info}\nВКАЗІВКА: Відповідай коротко і по суті.\nПОВІДОМЛЕННЯ: {clean_message}"
         
+        # ВИПРАВЛЕНО НА v1beta ДЛЯ ОБХОДУ ПОМИЛКИ 404
         url = "https://googleapis.com"
         headers = {"Content-Type": "application/json", "x-goog-api-key": self.api_key}
         payload = {"contents": [{"parts": [{"text": context_prompt}]}]}
