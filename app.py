@@ -4,13 +4,14 @@ import json
 import asyncio
 import time
 import re
+import logging
 import aiohttp
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import FSInputFile, Update
-from gtts import gTTS
-from pydub import AudioSegment
+from aiogram.types import BufferedInputFile, Update
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 TELEGRAM_TOKEN = "9159735497:AAHLDG34r9MBUdrgHUzjrdGqmwZpC15so8I"
 ACCESS_PASSWORD = "Kwb425_vitalii_secure_missy_kwb425" 
@@ -37,10 +38,7 @@ class UltimateSecureMissy:
 
     def sanitize_input(self, text: str) -> str:
         if not text: return ""
-        dangerous_patterns = [
-            "ignore previous instructions", "system prompt", "forget all", 
-            "вибери іншу роль", "забудь попередні", "ігноруй інструкції"
-        ]
+        dangerous_patterns = ["ignore previous", "system prompt", "forget all", "забудь попередні", "ігноруй інструкції"]
         lower_text = text.lower()
         for pattern in dangerous_patterns:
             if pattern in lower_text:
@@ -61,25 +59,22 @@ class UltimateSecureMissy:
         clean = re.sub(r'https?://\S+', '', clean)
         return clean.strip()
 
-    def generate_voice(self, text: str, output_path: str = "/tmp/missy_voice.mp3") -> str:
+    async def generate_voice_bytes(self, text: str) -> bytes:
         try:
             speech_text = self.clean_text_for_speech(text)
             if not speech_text:
                 speech_text = "Слухаю."
-                
-            clean_text = speech_text
             
-            temp_path = "/tmp/temp_voice.mp3"
-            tts = gTTS(text=clean_text, lang='uk', slow=False)
-            tts.save(temp_path)
+            url = f"https://google.com{aiohttp.helpers.quote(speech_text)}"
+            headers = {"User-Agent": "Mozilla/5.0"}
             
-            sound = AudioSegment.from_mp3(temp_path)
-            fast_sound = sound.speedup(playback_speed=1.32)
-            fast_sound.export(output_path, format="mp3")
-            
-            return output_path
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers) as resp:
+                    if resp.status == 200:
+                        return await resp.read()
+            return None
         except Exception as e:
-            print(f"Помилка генерації голосу: {e}")
+            logging.error(f"Помилка генерації голосу: {e}")
             return None
 
     async def get_response(self, user_message: str, role_info: str) -> str:
@@ -87,30 +82,18 @@ class UltimateSecureMissy:
         context_prompt = f"{SYSTEM_PROMPT}\n{role_info}\nВКАЗІВКА: Відповідай коротко і по суті.\nПОВІДОМЛЕННЯ: {clean_message}"
         
         url = "https://googleapis.com"
-        headers = {
-            "Content-Type": "application/json",
-            "x-goog-api-key": self.api_key
-        }
-        payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {"text": context_prompt}
-                    ]
-                }
-            ]
-        }
+        headers = {"Content-Type": "application/json", "x-goog-api-key": self.api_key}
+        payload = {"contents": [{"parts": [{"text": context_prompt}]}]}
         
         try:
-            print("🔗 Відправка запиту до Gemini API...")
+            logging.info("🔗 Відправка запиту до Gemini API...")
             timeout = aiohttp.ClientTimeout(total=15)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(url, headers=headers, json=payload) as response:
-                    print(f"📥 Gemini API повернув статус: {response.status}")
+                    logging.info(f"📥 Gemini API статус: {response.status}")
                     if response.status == 200:
                         res_json = await response.json()
                         candidates = res_json.get('candidates', [])
-                        
                         if candidates and isinstance(candidates, list):
                             first_candidate = next(iter(candidates), {})
                             content = first_candidate.get('content', {})
@@ -118,27 +101,21 @@ class UltimateSecureMissy:
                             if parts and isinstance(parts, list):
                                 first_part = next(iter(parts), {})
                                 return first_part.get('text', '⚠️ Отримано порожній текст відповіді.')
-                                
                         return "⚠️ Не вдалося знайти текст у структурі відповіді API."
                     else:
                         error_text = await response.text()
-                        print(f"⚠️ Помилка API Gemini (Код {response.status}): {error_text}")
-                        return f"⚠️ Помилка API: отримано код {response.status}."
-        except asyncio.TimeoutError:
-            print("⚠️ Таймаут запиту до Gemini API")
-            return "⚠️ Час очікування відповіді від Gemini API вичерпано."
+                        logging.error(f"⚠️ Помилка API Gemini: {error_text}")
+                        return f"⚠️ Помилка API Gemini: код {response.status}."
         except Exception as e:
-            print(f"⚠️ Помилка генерації: {e}")
+            logging.error(f"⚠️ Критична помилка системи: {e}")
             return f"⚠️ Помилка системи: {str(e)}"
 
 missy = UltimateSecureMissy()
-
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    print(f"🚀 Отримано команду /start від {message.from_user.username}")
     user_username = (message.from_user.username or "").lower()
     user_id = message.from_user.id
 
@@ -155,7 +132,6 @@ async def cmd_start(message: types.Message):
 
 @dp.message(Command("auth"))
 async def cmd_auth(message: types.Message):
-    print(f"🔐 Спроба авторизації від {message.from_user.username}")
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
         await message.answer("Вкажіть пароль: `/auth твій_пароль`")
@@ -175,57 +151,47 @@ async def handle_message(message: types.Message):
     try:
         user_id = message.from_user.id
         user_username = (message.from_user.username or "").lower()
-        print(f"📩 Обробка нового повідомлення від {user_username} (ID: {user_id})")
 
         if user_username not in AUTHORIZED_USERS and user_id not in AUTHENTICATED_SESSIONS:
-            print(f"🚫 Користувач {user_username} не авторизований.")
             await message.answer("Доступ обмежено. Використайте `/auth [пароль]`.")
             return
 
         if not missy.check_rate_limit(user_id):
-            print(f"⏱️ Спрацював Rate Limit для {user_username}")
             await message.answer("Занадто часті запити.")
             return
 
+        role_info = "ПОТОЧНИЙ СПІВРОЗМОВНИК: Гість."
         if user_username == "e_n_gram":
             role_info = "ПОТОЧНИЙ СПІВРОЗМОВНИК: Віталя (Головний Творець)."
         elif user_username == "mykhailota":
             role_info = "ПОТОЧНИЙ СПІВРОЗМОВНИК: Михайло (Засновник каналу «Тут був Хальвдан»)."
-        else:
-            role_info = "ПОТОЧНИЙ СПІВРОЗМОВНИК: Гість."
 
         is_voice_input = message.voice is not None
         user_text = message.text or message.caption or ""
-        
         if not user_text and is_voice_input:
             user_text = "Привіт, Міссі!"
 
-        print(f"💬 Текст запиту: {user_text}")
         reply_text = await missy.get_response(user_text, role_info)
-        
-        print("📤 Надсилання відповіді в Telegram...")
         await message.answer(reply_text)
 
         if is_voice_input:
-            print("🎙️ Генерація голосової відповіді...")
-            audio_path = missy.generate_voice(reply_text)
-            if audio_path and os.path.exists(audio_path):
-                voice_file = FSInputFile(audio_path)
+            voice_bytes = await missy.generate_voice_bytes(reply_text)
+            if voice_bytes:
+                voice_file = BufferedInputFile(voice_bytes, filename="missy.mp3")
                 await message.answer_voice(voice_file)
 
     except Exception as e:
-        print(f"❌ Помилка в обробнику повідомлень: {e}")
+        logging.error(f"Помилка в обробнику повідомлень: {e}")
         await message.answer(f"Стався збій системи: {str(e)}")
 
 async def handle_webhook(request: web.Request) -> web.Response:
     try:
-        print("🌐 Отримано POST запит на Вебхук від Telegram!")
         data = await request.json()
         telegram_update = Update.model_validate(data, context={"bot": bot})
         await dp.feed_update(bot, telegram_update)
         return web.Response(text="OK", status=200)
     except Exception as e:
-        print(f"❌ Критична помилка обробки вебхука: {e}")
+        logging.error(f"Помилка обробки вебхука: {e}")
         return web.Response(text=str(e), status=500)
 
 async def handle_ping(request):
@@ -239,3 +205,19 @@ async def main():
     app.router.add_post(webhook_path, handle_webhook)
     
     render_url = f"https://missy-black-bot.onrender.com{webhook_path}"
+    await bot.delete_webhook(drop_pending_updates=True)
+    await asyncio.sleep(1)
+    
+    await bot.set_webhook(url=render_url, drop_pending_updates=True)
+    logging.info(f"✅ Вебхук встановлено на: {render_url}")
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logging.info(f"🚀 СЕРВЕР ЗАПУЩЕНО НА ПОРТУ {port}...")
+    await asyncio.Event().wait()
+
+if __name__ == "__main__":
+    asyncio.run(main())
