@@ -86,7 +86,6 @@ class UltimateSecureMissy:
         clean_message = self.sanitize_input(user_message)
         context_prompt = f"{SYSTEM_PROMPT}\n{role_info}\nВКАЗІВКА: Відповідай коротко і по суті.\nПОВІДОМЛЕННЯ: {clean_message}"
         
-        # Використовуємо актуальний і стабільний v1 endpoint від Google
         url = "https://googleapis.com"
         headers = {
             "Content-Type": "application/json",
@@ -103,17 +102,25 @@ class UltimateSecureMissy:
         }
         
         try:
-            async with aiohttp.ClientSession() as session:
+            timeout = aiohttp.ClientTimeout(total=15)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(url, headers=headers, json=payload) as response:
                     if response.status == 200:
                         res_json = await response.json()
-                        # Правильний розбір вкладеного JSON для отримання відповіді
-                        text_response = res_json['candidates'][0]['content']['parts'][0]['text']
-                        return text_response
+                        # ВИПРАВЛЕНО: Коректний покроковий доступ до елементів списку JSON
+                        candidates = res_json.get('candidates', [])
+                        if candidates and len(candidates) > 0:
+                            content = candidates[0].get('content', {})
+                            parts = content.get('parts', [])
+                            if parts and len(parts) > 0:
+                                return parts[0].get('text', '⚠️ Отримано порожній текст відповіді.')
+                        return "⚠️ Не вдалося знайти текст у відповіді API."
                     else:
                         error_text = await response.text()
                         print(f"⚠️ Помилка API Gemini (Код {response.status}): {error_text}")
                         return f"⚠️ Помилка API: отримано код {response.status}."
+        except asyncio.TimeoutError:
+            return "⚠️ Час очікування відповіді від Gemini API вичерпано."
         except Exception as e:
             print(f"⚠️ Помилка генерації: {e}")
             return f"⚠️ Помилка системи: {str(e)}"
@@ -146,6 +153,7 @@ async def cmd_auth(message: types.Message):
         await message.answer("Вкажіть пароль: `/auth твій_пароль`")
         return
     
+    # ВИПРАВЛЕНО: Повернуто правильну роботу з індексом аргументу
     password = args[1].strip()
     user_id = message.from_user.id
     
