@@ -1,5 +1,2 @@
-google-genai
-aiogram
-aiohttp
-gtts
-pydub
+aiogram>=3.0.0
+groq
