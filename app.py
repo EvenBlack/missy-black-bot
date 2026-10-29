@@ -81,14 +81,14 @@ class UltimateSecureMissy:
         clean_message = self.sanitize_input(user_message)
         context_prompt = f"{SYSTEM_PROMPT}\n{role_info}\nВКАЗІВКА: Відповідай коротко і по суті.\nПОВІДОМЛЕННЯ: {clean_message}"
         
-        # ОСТАТОЧНО ПРАВИЛЬНИЙ СТАБІЛЬНИЙ URL ДЛЯ НОВИХ КЛЮЧІВ СЕРІЇ AQ
         url = f"https://googleapis.com{self.api_key}"
         headers = {"Content-Type": "application/json"}
         payload = {"contents": [{"parts": [{"text": context_prompt}]}]}
         
         try:
-            logging.info("🔗 Відправка запиту до Gemini API (v1)...")
-            timeout = aiohttp.ClientTimeout(total=15)
+            logging.info("🔗 Відправка запиту до Gemini API...")
+            # Захисний таймаут: якщо Google не відповідає за 8 секунд — примусово завершуємо запит
+            timeout = aiohttp.ClientTimeout(total=8)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(url, headers=headers, json=payload) as response:
                     logging.info(f"📥 Gemini API статус: {response.status}")
@@ -101,15 +101,16 @@ class UltimateSecureMissy:
                             parts = content.get('parts', [])
                             if parts and isinstance(parts, list):
                                 first_part = next(iter(parts), {})
-                                return first_part.get('text', '⚠️ Отримано порожній текст відповіді.')
-                        return "⚠️ Не вдалося знайти текст у структурі відповіді API."
+                                return first_part.get('text', '⚠️ Порожня відповідь моделі.')
+                        return "⚠️ Помилка структури відповіді Google API."
+                    elif response.status == 400 or response.status == 403:
+                        return "❌ Помилка авторизації: Вшитий Gemini API-ключ заблоковано, недійсний або анульовано Google AI Studio."
                     else:
-                        error_text = await response.text()
-                        logging.error(f"⚠️ Помилка API Gemini: {error_text}")
-                        return f"⚠️ Помилка API Gemini (Код {response.status})."
+                        return f"⚠️ Помилка сервера Google: отримано статус-код {response.status}."
+        except asyncio.TimeoutError:
+            return "⏳ Запит до штучного інтелекту завис. Перевірте статус вашого API-ключа в Google AI Studio."
         except Exception as e:
-            logging.error(f"⚠️ Критична помилка системи запитів: {e}")
-            return f"⚠️ Помилка системи: {str(e)}"
+            return f"❌ Критичний збій системи: {str(e)}"
 
 missy = UltimateSecureMissy()
 bot = Bot(token=TELEGRAM_TOKEN)
@@ -128,11 +129,11 @@ async def cmd_start(message: types.Message):
         return
 
     if user_username == "e_n_gram":
-        await message.answer("Привіт, Віталю! Бот успішно запущено на Render через Webhook.")
+        await message.answer("Привіт, Віталю! Бот успішно запущено на Render.")
     elif user_username == "mykhailota":
-        await message.answer("Привіт, Михайле! Канал «Тут був Хальвдан» під захистом.")
+        await message.answer("Привіт, Михайле! Система під захистом.")
     else:
-        await message.answer("Привіт! Сеанс активовано.")
+        await message.answer("Сеанс активовано.")
 
 @dp.message(Command("auth"))
 async def cmd_auth(message: types.Message):
@@ -171,12 +172,12 @@ async def handle_message(message: types.Message):
         if user_username == "e_n_gram":
             role_info = "ПОТОЧНИЙ СПІВРОЗМОВНИК: Віталя (Головний Творець)."
         elif user_username == "mykhailota":
-            role_info = "ПОТОЧНИЙ СПІВРОЗМОВНИК: Михайло (Засновник каналу «Тут був Хальвдан»)."
+            role_info = "ПОТОЧНИЙ СПІВРОЗМОВНИК: Михайло (Засновник каналу)."
 
         is_voice_input = message.voice is not None
         user_text = message.text or message.caption or ""
         if not user_text and is_voice_input:
-            user_text = "Привіт, Міссі!"
+            user_text = "Привіт!"
 
         reply_text = await missy.get_response(user_text, role_info)
         await message.answer(reply_text)
@@ -202,7 +203,7 @@ async def handle_webhook(request: web.Request) -> web.Response:
         return web.Response(text=str(e), status=500)
 
 async def handle_ping(request):
-    return web.Response(text="Missy Black Bot is running 24/7 via Webhook!")
+    return web.Response(text="Missy Bot is running!")
 
 async def main():
     app = web.Application()
@@ -223,7 +224,7 @@ async def main():
     port = int(os.environ.get("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    logging.info(f"🚀 СЕРВЕР ЗАПУЩЕНО НА ПОРТУ {port}...")
+    logging.info(f"🚀 СЕРВЕР ЗАПУЩЕНО...")
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
