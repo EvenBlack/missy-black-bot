@@ -67,7 +67,7 @@ class UltimateSecureMissy:
             if not speech_text:
                 speech_text = "Слухаю."
                 
-            clean_text = speech_text if len(speech_text) < 400 else speech_text[:397] + "..."
+            clean_text = speech_text if len(speech_text) < 400 else speech_text.strip()
             
             temp_path = "/tmp/temp_voice.mp3"
             tts = gTTS(text=clean_text, lang='uk', slow=False)
@@ -102,7 +102,7 @@ class UltimateSecureMissy:
         }
         
         try:
-            print(f"🔗 Відправка запиту до Gemini API...")
+            print("🔗 Відправка запиту до Gemini API...")
             timeout = aiohttp.ClientTimeout(total=15)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(url, headers=headers, json=payload) as response:
@@ -111,13 +111,12 @@ class UltimateSecureMissy:
                         res_json = await response.json()
                         candidates = res_json.get('candidates', [])
                         
-                        # ВИПРАВЛЕНО: Додано коректні квадратні дужки для індексів масивів Python
-                        if candidates and isinstance(candidates, list) and len(candidates) > 0:
-                            first_candidate = candidates[0]
+                        if candidates and isinstance(candidates, list):
+                            first_candidate = next(iter(candidates), {})
                             content = first_candidate.get('content', {})
                             parts = content.get('parts', [])
-                            if parts and isinstance(parts, list) and len(parts) > 0:
-                                first_part = parts[0]
+                            if parts and isinstance(parts, list):
+                                first_part = next(iter(parts), {})
                                 return first_part.get('text', '⚠️ Отримано порожній текст відповіді.')
                                 
                         return "⚠️ Не вдалося знайти текст у структурі відповіді API."
@@ -162,8 +161,7 @@ async def cmd_auth(message: types.Message):
         await message.answer("Вкажіть пароль: `/auth твій_пароль`")
         return
     
-    # ВИПРАВЛЕНО: Додано індекс до списку аргументів
-    password = args[1].strip()
+    password = "".join(args[1:]).strip()
     user_id = message.from_user.id
     
     if password == ACCESS_PASSWORD:
@@ -205,11 +203,11 @@ async def handle_message(message: types.Message):
         print(f"💬 Текст запиту: {user_text}")
         reply_text = await missy.get_response(user_text, role_info)
         
-        print(f"📤 Надсилання відповіді в Telegram...")
+        print("📤 Надсилання відповіді в Telegram...")
         await message.answer(reply_text)
 
         if is_voice_input:
-            print(f"🎙️ Генерація голосової відповіді...")
+            print("🎙️ Generation голосової відповіді...")
             audio_path = missy.generate_voice(reply_text)
             if audio_path and os.path.exists(audio_path):
                 voice_file = FSInputFile(audio_path)
@@ -235,3 +233,8 @@ async def handle_ping(request):
 
 async def main():
     app = web.Application()
+    app.router.add_get("/", handle_ping)
+    
+    webhook_path = f"/webhook/{TELEGRAM_TOKEN}"
+    app.router.add_post(webhook_path, handle_webhook)
+    
