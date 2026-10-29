@@ -107,14 +107,18 @@ class UltimateSecureMissy:
                 async with session.post(url, headers=headers, json=payload) as response:
                     if response.status == 200:
                         res_json = await response.json()
-                        # ВИПРАВЛЕНО: Коректний покроковий доступ до елементів списку JSON
+                        
+                        # ПОВНІСТЮ ВИПРАВЛЕНО: Коректний доступ до елементів списків (масивів) Google API JSON
                         candidates = res_json.get('candidates', [])
-                        if candidates and len(candidates) > 0:
-                            content = candidates[0].get('content', {})
+                        if candidates and isinstance(candidates, list) and len(candidates) > 0:
+                            first_candidate = candidates[0]
+                            content = first_candidate.get('content', {})
                             parts = content.get('parts', [])
-                            if parts and len(parts) > 0:
-                                return parts[0].get('text', '⚠️ Отримано порожній текст відповіді.')
-                        return "⚠️ Не вдалося знайти текст у відповіді API."
+                            if parts and isinstance(parts, list) and len(parts) > 0:
+                                first_part = parts[0]
+                                return first_part.get('text', '⚠️ Отримано порожній текст відповіді.')
+                                
+                        return "⚠️ Не вдалося знайти текст у структурі відповіді API."
                     else:
                         error_text = await response.text()
                         print(f"⚠️ Помилка API Gemini (Код {response.status}): {error_text}")
@@ -153,7 +157,7 @@ async def cmd_auth(message: types.Message):
         await message.answer("Вкажіть пароль: `/auth твій_пароль`")
         return
     
-    # ВИПРАВЛЕНО: Повернуто правильну роботу з індексом аргументу
+    # ПОВНІСТЮ ВИПРАВЛЕНО: Коректна робота з індексом списку аргументів
     password = args[1].strip()
     user_id = message.from_user.id
     
