@@ -12,7 +12,8 @@ from aiogram.types import FSInputFile
 from gtts import gTTS
 from pydub import AudioSegment
 
-TELEGRAM_TOKEN = "9159735497:AAE6uPof9mZo99jGKRh0riEFY6mEvRyPNyQ"
+# Сюди встав новий токен від BotFather, якщо отримував його, або залиш свій поточний
+TELEGRAM_TOKEN = "9159735497:AAGsU-6WA2YHPXjN7mQLjmGR42Imnfg5lvk"
 ACCESS_PASSWORD = "Kwb425_vitalii_secure_missy_kwb425" 
 
 AUTHORIZED_USERS = {
@@ -32,7 +33,6 @@ SYSTEM_PROMPT = """
 
 class UltimateSecureMissy:
     def __init__(self):
-        # Отримуємо ключ із змінних середовища Render безпечно
         api_key = os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6JHd51Yag3jYsilKNJVzL8-L6DV_eXzBtXRQCJHu6Y6Q")
         genai.configure(api_key=api_key)
         self.user_timestamps = {}
@@ -89,7 +89,6 @@ class UltimateSecureMissy:
         context_prompt = f"{SYSTEM_PROMPT}\n{role_info}\nВКАЗІВКА: Відповідай коротко і по суті.\nПОВІДОМЛЕННЯ: {clean_message}"
         
         try:
-            # Використовуємо стабільну модель через класичний SDK
             model = genai.GenerativeModel('gemini-1.5-flash')
             response = model.generate_content(context_prompt)
             if response and response.text:
@@ -192,10 +191,14 @@ async def web_server():
     print(f"МІССІ ВЕБСЕРВЕР ЗАПУЩЕНО НА ПОРТУ {port}...")
 
 async def main():
-    await bot.delete_webhook(drop_pending_updates=True)
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+    except Exception as e:
+        print(f"Попередження вебхука: {e}")
+        
     print("МІССІ ЗАПУЩЕНА НА RENDER 24/7...")
     await web_server()
-    await dp.start_polling(bot)
+    await dp.start_polling(bot, handle_signals=False)
 
 if __name__ == "__main__":
     asyncio.run(main())
