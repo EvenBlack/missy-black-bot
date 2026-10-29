@@ -102,13 +102,13 @@ class UltimateSecureMissy:
         }
         
         try:
+            print(f"🔗 Відправка запиту до Gemini API...")
             timeout = aiohttp.ClientTimeout(total=15)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(url, headers=headers, json=payload) as response:
+                    print(f"📥 Gemini API повернув статус: {response.status}")
                     if response.status == 200:
                         res_json = await response.json()
-                        
-                        # ПОВНІСТЮ ВИПРАВЛЕНО: Коректний доступ до елементів списків (масивів) Google API JSON
                         candidates = res_json.get('candidates', [])
                         if candidates and isinstance(candidates, list) and len(candidates) > 0:
                             first_candidate = candidates[0]
@@ -124,6 +124,7 @@ class UltimateSecureMissy:
                         print(f"⚠️ Помилка API Gemini (Код {response.status}): {error_text}")
                         return f"⚠️ Помилка API: отримано код {response.status}."
         except asyncio.TimeoutError:
+            print("⚠️ Таймаут запиту до Gemini API")
             return "⚠️ Час очікування відповіді від Gemini API вичерпано."
         except Exception as e:
             print(f"⚠️ Помилка генерації: {e}")
@@ -136,6 +137,7 @@ dp = Dispatcher()
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
+    print(f"🚀 Отримано команду /start від {message.from_user.username}")
     user_username = (message.from_user.username or "").lower()
     user_id = message.from_user.id
 
@@ -152,12 +154,12 @@ async def cmd_start(message: types.Message):
 
 @dp.message(Command("auth"))
 async def cmd_auth(message: types.Message):
+    print(f"🔐 Спроба авторизації від {message.from_user.username}")
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
         await message.answer("Вкажіть пароль: `/auth твій_пароль`")
         return
     
-    # ПОВНІСТЮ ВИПРАВЛЕНО: Коректна робота з індексом списку аргументів
     password = args[1].strip()
     user_id = message.from_user.id
     
@@ -172,12 +174,15 @@ async def handle_message(message: types.Message):
     try:
         user_id = message.from_user.id
         user_username = (message.from_user.username or "").lower()
+        print(f"📩 Обробка нового повідомлення від {user_username} (ID: {user_id})")
 
         if user_username not in AUTHORIZED_USERS and user_id not in AUTHENTICATED_SESSIONS:
+            print(f"🚫 Користувач {user_username} не авторизований.")
             await message.answer("Доступ обмежено. Використайте `/auth [пароль]`.")
             return
 
         if not missy.check_rate_limit(user_id):
+            print(f"⏱️ Спрацював Rate Limit для {user_username}")
             await message.answer("Занадто часті запити.")
             return
 
@@ -194,28 +199,32 @@ async def handle_message(message: types.Message):
         if not user_text and is_voice_input:
             user_text = "Привіт, Міссі!"
 
+        print(f"💬 Текст запиту: {user_text}")
         reply_text = await missy.get_response(user_text, role_info)
         
+        print(f"📤 Надсилання відповіді в Telegram...")
         await message.answer(reply_text)
 
         if is_voice_input:
+            print(f"🎙️ Генерація голосової відповіді...")
             audio_path = missy.generate_voice(reply_text)
             if audio_path and os.path.exists(audio_path):
                 voice_file = FSInputFile(audio_path)
                 await message.answer_voice(voice_file)
 
     except Exception as e:
-        print(f"Помилка в обробнику: {e}")
+        print(f"❌ Помилка в обробнику повідомлень: {e}")
         await message.answer(f"Стався збій системи: {str(e)}")
 
 async def handle_webhook(request: web.Request) -> web.Response:
     try:
+        print("🌐 Отримано POST запит на Вебхук від Telegram!")
         data = await request.json()
         telegram_update = Update.model_validate(data, context={"bot": bot})
         await dp.feed_update(bot, telegram_update)
         return web.Response(text="OK", status=200)
     except Exception as e:
-        print(f"Помилка обробки вебхука: {e}")
+        print(f"❌ Критична помилка обробки вебхука: {e}")
         return web.Response(text=str(e), status=500)
 
 async def handle_ping(request):
@@ -229,17 +238,3 @@ async def main():
     app.router.add_post(webhook_path, handle_webhook)
     
     render_url = f"https://onrender.com{webhook_path}"
-    await bot.set_webhook(url=render_url, drop_pending_updates=True)
-    print(f"Вебхук успішно встановлено на: {render_url}")
-
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.environ.get("PORT", 10000))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    print(f"МІССІ ВЕБСЕРВЕР ЗАПУЩЕНО НА ПОРТУ {port}...")
-
-    await asyncio.Event().wait()
-
-if __name__ == "__main__":
-    asyncio.run(main())
