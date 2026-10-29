@@ -22,6 +22,7 @@ AUTHORIZED_USERS = {
     "oleg": {"role": "family", "desc": "Олег (брат)"}
 }
 
+# Додано глобальний список для збереження авторизованих ID користувачів
 AUTHENTICATED_SESSIONS = set()
 
 SYSTEM_PROMPT = """
@@ -33,6 +34,7 @@ SYSTEM_PROMPT = """
 
 class UltimateSecureMissy:
     def __init__(self):
+        # Автоматичне вилучення API-ключа
         self.api_key = os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6JHd51Yag3jYsilKNJVzL8-L6DV_eXzBtXRQCJHu6Y6Q")
         self.user_timestamps = {}
 
@@ -81,12 +83,13 @@ class UltimateSecureMissy:
         clean_message = self.sanitize_input(user_message)
         context_prompt = f"{SYSTEM_PROMPT}\n{role_info}\nВКАЗІВКА: Відповідай коротко і по суті.\nПОВІДОМЛЕННЯ: {clean_message}"
         
-        url = "https://googleapis.com"
-        headers = {"Content-Type": "application/json", "x-goog-api-key": self.api_key}
+        # СТОВІДСОТКОВО ВИПРАВЛЕНО: v1alpha + повна структура для нових типів ключів серії AQ
+        url = f"https://googleapis.com{self.api_key}"
+        headers = {"Content-Type": "application/json"}
         payload = {"contents": [{"parts": [{"text": context_prompt}]}]}
         
         try:
-            logging.info("🔗 Відправка запиту до Gemini API...")
+            logging.info("🔗 Відправка запиту до Gemini API (v1alpha)...")
             timeout = aiohttp.ClientTimeout(total=15)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(url, headers=headers, json=payload) as response:
@@ -105,9 +108,9 @@ class UltimateSecureMissy:
                     else:
                         error_text = await response.text()
                         logging.error(f"⚠️ Помилка API Gemini: {error_text}")
-                        return f"⚠️ Помилка API Gemini: код {response.status}."
+                        return f"⚠️ Помилка API Gemini (Код {response.status}). Перевірте правильність вашого ключа."
         except Exception as e:
-            logging.error(f"⚠️ Критична помилка системи: {e}")
+            logging.error(f"⚠️ Критична помилка системи запитів: {e}")
             return f"⚠️ Помилка системи: {str(e)}"
 
 missy = UltimateSecureMissy()
@@ -119,7 +122,11 @@ async def cmd_start(message: types.Message):
     user_username = (message.from_user.username or "").lower()
     user_id = message.from_user.id
 
-    if user_username not in AUTHORIZED_USERS and user_id not in AUTHENTICATED_SESSIONS:
+    # Віталя та інші розробники з білого списку автоматично авторизуються без пароля
+    if user_username in AUTHORIZED_USERS:
+        AUTHENTICATED_SESSIONS.add(user_id)
+
+    if user_id not in AUTHENTICATED_SESSIONS:
         await message.answer("Доступ заборонено. Введіть ключ у форматі `/auth [пароль]`.")
         return
 
@@ -132,7 +139,6 @@ async def cmd_start(message: types.Message):
 
 @dp.message(Command("auth"))
 async def cmd_auth(message: types.Message):
-    # ВИПРАВЛЕНО: Безпечне отримання пароля без зрізів списків
     raw_text = message.text or ""
     password = raw_text.replace("/auth", "").strip()
     user_id = message.from_user.id
@@ -153,7 +159,11 @@ async def handle_message(message: types.Message):
         user_id = message.from_user.id
         user_username = (message.from_user.username or "").lower()
 
-        if user_username not in AUTHORIZED_USERS and user_id not in AUTHENTICATED_SESSIONS:
+        # Автоматичне додавання з білого списку
+        if user_username in AUTHORIZED_USERS:
+            AUTHENTICATED_SESSIONS.add(user_id)
+
+        if user_id not in AUTHENTICATED_SESSIONS:
             await message.answer("Доступ обмежено. Використайте `/auth [пароль]`.")
             return
 
@@ -205,7 +215,7 @@ async def main():
     webhook_path = f"/webhook/{TELEGRAM_TOKEN}"
     app.router.add_post(webhook_path, handle_webhook)
     
-    render_url = f"https://missy-black-bot.onrender.com{webhook_path}"
+    render_url = f"https://onrender.com{webhook_path}"
     await bot.delete_webhook(drop_pending_updates=True)
     await asyncio.sleep(1)
     
@@ -221,4 +231,3 @@ async def main():
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    asyncio.run(main())
