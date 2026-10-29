@@ -86,7 +86,7 @@ class UltimateSecureMissy:
         clean_message = self.sanitize_input(user_message)
         context_prompt = f"{SYSTEM_PROMPT}\n{role_info}\nВКАЗІВКА: Відповідай коротко і по суті.\nПОВІДОМЛЕННЯ: {clean_message}"
         
-        # Використовуємо прямий HTTP-запит з новим заголовком авторизації для обходу бага бібліотеки
+        # Використовуємо актуальний і стабільний v1 endpoint від Google
         url = "https://googleapis.com"
         headers = {
             "Content-Type": "application/json",
@@ -107,6 +107,7 @@ class UltimateSecureMissy:
                 async with session.post(url, headers=headers, json=payload) as response:
                     if response.status == 200:
                         res_json = await response.json()
+                        # Правильний розбір вкладеного JSON для отримання відповіді
                         text_response = res_json['candidates'][0]['content']['parts'][0]['text']
                         return text_response
                     else:
@@ -215,7 +216,7 @@ async def main():
     webhook_path = f"/webhook/{TELEGRAM_TOKEN}"
     app.router.add_post(webhook_path, handle_webhook)
     
-    render_url = f"https://missy-black-bot.onrender.com{webhook_path}"
+    render_url = f"https://onrender.com{webhook_path}"
     await bot.set_webhook(url=render_url, drop_pending_updates=True)
     print(f"Вебхук успішно встановлено на: {render_url}")
 
