@@ -22,7 +22,6 @@ AUTHORIZED_USERS = {
     "oleg": {"role": "family", "desc": "Олег (брат)"}
 }
 
-# Додано глобальний список для збереження авторизованих ID користувачів
 AUTHENTICATED_SESSIONS = set()
 
 SYSTEM_PROMPT = """
@@ -34,7 +33,6 @@ SYSTEM_PROMPT = """
 
 class UltimateSecureMissy:
     def __init__(self):
-        # Автоматичне вилучення API-ключа
         self.api_key = os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6JHd51Yag3jYsilKNJVzL8-L6DV_eXzBtXRQCJHu6Y6Q")
         self.user_timestamps = {}
 
@@ -83,7 +81,6 @@ class UltimateSecureMissy:
         clean_message = self.sanitize_input(user_message)
         context_prompt = f"{SYSTEM_PROMPT}\n{role_info}\nВКАЗІВКА: Відповідай коротко і по суті.\nПОВІДОМЛЕННЯ: {clean_message}"
         
-        # СТОВІДСОТКОВО ВИПРАВЛЕНО: v1alpha + повна структура для нових типів ключів серії AQ
         url = f"https://googleapis.com{self.api_key}"
         headers = {"Content-Type": "application/json"}
         payload = {"contents": [{"parts": [{"text": context_prompt}]}]}
@@ -108,7 +105,7 @@ class UltimateSecureMissy:
                     else:
                         error_text = await response.text()
                         logging.error(f"⚠️ Помилка API Gemini: {error_text}")
-                        return f"⚠️ Помилка API Gemini (Код {response.status}). Перевірте правильність вашого ключа."
+                        return f"⚠️ Помилка API Gemini (Код {response.status})."
         except Exception as e:
             logging.error(f"⚠️ Критична помилка системи запитів: {e}")
             return f"⚠️ Помилка системи: {str(e)}"
@@ -122,7 +119,6 @@ async def cmd_start(message: types.Message):
     user_username = (message.from_user.username or "").lower()
     user_id = message.from_user.id
 
-    # Віталя та інші розробники з білого списку автоматично авторизуються без пароля
     if user_username in AUTHORIZED_USERS:
         AUTHENTICATED_SESSIONS.add(user_id)
 
@@ -159,7 +155,6 @@ async def handle_message(message: types.Message):
         user_id = message.from_user.id
         user_username = (message.from_user.username or "").lower()
 
-        # Автоматичне додавання з білого списку
         if user_username in AUTHORIZED_USERS:
             AUTHENTICATED_SESSIONS.add(user_id)
 
@@ -215,7 +210,7 @@ async def main():
     webhook_path = f"/webhook/{TELEGRAM_TOKEN}"
     app.router.add_post(webhook_path, handle_webhook)
     
-    render_url = f"https://onrender.com{webhook_path}"
+    render_url = f"https://missy-black-bot.onrender.com{webhook_path}"
     await bot.delete_webhook(drop_pending_updates=True)
     await asyncio.sleep(1)
     
@@ -231,3 +226,4 @@ async def main():
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
+    asyncio.run(main())
