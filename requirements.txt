@@ -1,5 +1,0 @@
-aiogram==3.13.0
-requests
-gtts
-pydub
-aiohttp
