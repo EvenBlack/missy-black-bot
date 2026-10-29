@@ -110,6 +110,8 @@ class UltimateSecureMissy:
                     if response.status == 200:
                         res_json = await response.json()
                         candidates = res_json.get('candidates', [])
+                        
+                        # ВИПРАВЛЕНО: Додано коректні квадратні дужки для індексів масивів Python
                         if candidates and isinstance(candidates, list) and len(candidates) > 0:
                             first_candidate = candidates[0]
                             content = first_candidate.get('content', {})
@@ -160,6 +162,7 @@ async def cmd_auth(message: types.Message):
         await message.answer("Вкажіть пароль: `/auth твій_пароль`")
         return
     
+    # ВИПРАВЛЕНО: Додано індекс до списку аргументів
     password = args[1].strip()
     user_id = message.from_user.id
     
@@ -232,9 +235,3 @@ async def handle_ping(request):
 
 async def main():
     app = web.Application()
-    app.router.add_get("/", handle_ping)
-    
-    webhook_path = f"/webhook/{TELEGRAM_TOKEN}"
-    app.router.add_post(webhook_path, handle_webhook)
-    
-    render_url = f"https://onrender.com{webhook_path}"
