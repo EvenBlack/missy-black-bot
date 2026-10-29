@@ -4,7 +4,7 @@ import json
 import asyncio
 import time
 import re
-import google.generativeai as genai
+import aiohttp
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -32,8 +32,7 @@ SYSTEM_PROMPT = """
 
 class UltimateSecureMissy:
     def __init__(self):
-        api_key = os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6JHd51Yag3jYsilKNJVzL8-L6DV_eXzBtXRQCJHu6Y6Q")
-        genai.configure(api_key=api_key)
+        self.api_key = os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6JHd51Yag3jYsilKNJVzL8-L6DV_eXzBtXRQCJHu6Y6Q")
         self.user_timestamps = {}
 
     def sanitize_input(self, text: str) -> str:
@@ -87,16 +86,36 @@ class UltimateSecureMissy:
         clean_message = self.sanitize_input(user_message)
         context_prompt = f"{SYSTEM_PROMPT}\n{role_info}\nВКАЗІВКА: Відповідай коротко і по суті.\nПОВІДОМЛЕННЯ: {clean_message}"
         
+        # Використовуємо прямий HTTP-запит з новим заголовком авторизації для обходу бага бібліотеки
+        url = "https://googleapis.com"
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": self.api_key
+        }
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {"text": context_prompt}
+                    ]
+                }
+            ]
+        }
+        
         try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            response = model.generate_content(context_prompt)
-            if response and response.text:
-                return response.text
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers, json=payload) as response:
+                    if response.status == 200:
+                        res_json = await response.json()
+                        text_response = res_json['candidates'][0]['content']['parts'][0]['text']
+                        return text_response
+                    else:
+                        error_text = await response.text()
+                        print(f"⚠️ Помилка API Gemini (Код {response.status}): {error_text}")
+                        return f"⚠️ Помилка API: отримано код {response.status}."
         except Exception as e:
             print(f"⚠️ Помилка генерації: {e}")
-            return f"⚠️ Помилка API: {str(e)}"
-        
-        return "⚠️ Не вдалося отримати відповідь від моделі."
+            return f"⚠️ Помилка системи: {str(e)}"
 
 missy = UltimateSecureMissy()
 
