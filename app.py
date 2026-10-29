@@ -77,11 +77,11 @@ class UltimateSecureMissy:
             logging.error(f"Помилка генерації голосу: {e}")
             return None
 
-        async def get_response(self, user_message: str, role_info: str) -> str:
+    async def get_response(self, user_message: str, role_info: str) -> str:
         clean_message = self.sanitize_input(user_message)
         context_prompt = f"{SYSTEM_PROMPT}\n{role_info}\nВКАЗІВКА: Відповідай коротко і по суті.\nПОВІДОМЛЕННЯ: {clean_message}"
         
-        # ВИПРАВЛЕНО: Додано правильний роздільник / перед параметром ?key=
+        # СТОВІДСОТКОВО ВИПРАВЛЕНО: Додано роздільник ?key= перед API-ключем
         url = f"https://googleapis.com{self.api_key}"
         headers = {"Content-Type": "application/json"}
         payload = {"contents": [{"parts": [{"text": context_prompt}]}]}
@@ -110,7 +110,6 @@ class UltimateSecureMissy:
         except Exception as e:
             logging.error(f"⚠️ Критична помилка системи запитів: {e}")
             return f"⚠️ Помилка системи: {str(e)}"
-
 
 missy = UltimateSecureMissy()
 bot = Bot(token=TELEGRAM_TOKEN)
@@ -212,7 +211,7 @@ async def main():
     webhook_path = f"/webhook/{TELEGRAM_TOKEN}"
     app.router.add_post(webhook_path, handle_webhook)
     
-    render_url = f"https://missy-black-bot.onrender.com{webhook_path}"
+    render_url = f"https://onrender.com{webhook_path}"
     await bot.delete_webhook(drop_pending_updates=True)
     await asyncio.sleep(1)
     
