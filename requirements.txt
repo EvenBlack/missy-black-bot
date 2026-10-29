@@ -1,0 +1,6 @@
+aiogram==3.13.0
+google-generativeai
+gtts
+pydub
+aiohttp
+google-auth
