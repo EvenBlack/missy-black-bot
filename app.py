@@ -13,7 +13,7 @@ from gtts import gTTS
 from pydub import AudioSegment
 
 # Сюди встав новий токен від BotFather, якщо отримував його, або залиш свій поточний
-TELEGRAM_TOKEN = "9159735497:AAE6uPof9mZo99jGKRh0riEFY6mEvRyPNyQ"
+TELEGRAM_TOKEN = "9159735497:AAHLDG34r9MBUdrgHUzjrdGqmwZpC15so8I"
 ACCESS_PASSWORD = "Kwb425_vitalii_secure_missy_kwb425" 
 
 AUTHORIZED_USERS = {
