@@ -194,10 +194,15 @@ async def web_server():
     print(f"МІССІ ВЕБСЕРВЕР ЗАПУЩЕНО НА ПОРТУ {port}...")
 
 async def main():
+    # Очищуємо стару чергу перед запуском
     await bot.delete_webhook(drop_pending_updates=True)
     print("МІССІ ЗАПУЩЕНА НА RENDER 24/7...")
-    await web_server()
-    await dp.start_polling(bot)
+    
+    # Запускаємо вебсервер і polling одночасно (асинхронно)
+    await asyncio.gather(
+        web_server(),
+        dp.start_polling(bot)
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
