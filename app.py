@@ -67,7 +67,7 @@ class UltimateSecureMissy:
             if not speech_text:
                 speech_text = "Слухаю."
                 
-            clean_text = speech_text if len(speech_text) < 400 else speech_text.strip()
+            clean_text = speech_text
             
             temp_path = "/tmp/temp_voice.mp3"
             tts = gTTS(text=clean_text, lang='uk', slow=False)
@@ -238,3 +238,4 @@ async def main():
     webhook_path = f"/webhook/{TELEGRAM_TOKEN}"
     app.router.add_post(webhook_path, handle_webhook)
     
+    render_url = f"https://onrender.com{webhook_path}"
