@@ -8,11 +8,10 @@ import google.generativeai as genai
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import FSInputFile
+from aiogram.types import FSInputFile, Update
 from gtts import gTTS
 from pydub import AudioSegment
 
-# Сюди встав новий токен від BotFather, якщо отримував його, або залиш свій поточний
 TELEGRAM_TOKEN = "9159735497:AAHLDG34r9MBUdrgHUzjrdGqmwZpC15so8I"
 ACCESS_PASSWORD = "Kwb425_vitalii_secure_missy_kwb425" 
 
@@ -114,7 +113,7 @@ async def cmd_start(message: types.Message):
         return
 
     if user_username == "e_n_gram":
-        await message.answer("Привіт, Віталю! Бот успішно запущено на Render 24/7.")
+        await message.answer("Привіт, Віталю! Бот успішно запущено на Render через Webhook.")
     elif user_username == "mykhailota":
         await message.answer("Привіт, Михайле! Канал «Тут був Хальвдан» під захистом.")
     else:
@@ -177,12 +176,30 @@ async def handle_message(message: types.Message):
         print(f"Помилка в обробнику: {e}")
         await message.answer(f"Стався збій системи: {str(e)}")
 
-async def handle_ping(request):
-    return web.Response(text="Missy Black Bot is running 24/7!")
+async def handle_webhook(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+        telegram_update = Update.model_validate(data, context={"bot": bot})
+        await dp.feed_update(bot, telegram_update)
+        return web.Response(text="OK", status=200)
+    except Exception as e:
+        print(f"Помилка обробки вебхука: {e}")
+        return web.Response(text=str(e), status=500)
 
-async def web_server():
+async def handle_ping(request):
+    return web.Response(text="Missy Black Bot is running 24/7 via Webhook!")
+
+async def main():
     app = web.Application()
     app.router.add_get("/", handle_ping)
+    
+    webhook_path = f"/webhook/{TELEGRAM_TOKEN}"
+    app.router.add_post(webhook_path, handle_webhook)
+    
+    render_url = f"https://missy-black-bot.onrender.com{webhook_path}"
+    await bot.set_webhook(url=render_url, drop_pending_updates=True)
+    print(f"Вебхук успішно встановлено на: {render_url}")
+
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", 10000))
@@ -190,15 +207,7 @@ async def web_server():
     await site.start()
     print(f"МІССІ ВЕБСЕРВЕР ЗАПУЩЕНО НА ПОРТУ {port}...")
 
-async def main():
-    try:
-        await bot.delete_webhook(drop_pending_updates=True)
-    except Exception as e:
-        print(f"Попередження вебхука: {e}")
-        
-    print("МІССІ ЗАПУЩЕНА НА RENDER 24/7...")
-    await web_server()
-    await dp.start_polling(bot, handle_signals=False)
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
     asyncio.run(main())
