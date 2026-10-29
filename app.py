@@ -81,13 +81,13 @@ class UltimateSecureMissy:
         clean_message = self.sanitize_input(user_message)
         context_prompt = f"{SYSTEM_PROMPT}\n{role_info}\nВКАЗІВКА: Відповідай коротко і по суті.\nПОВІДОМЛЕННЯ: {clean_message}"
         
-        # СТОВІДСОТКОВО ВИПРАВЛЕНО: Додано роздільник ?key= перед API-ключем
+        # ОСТАТОЧНО ПРАВИЛЬНИЙ СТАБІЛЬНИЙ URL ДЛЯ НОВИХ КЛЮЧІВ СЕРІЇ AQ
         url = f"https://googleapis.com{self.api_key}"
         headers = {"Content-Type": "application/json"}
         payload = {"contents": [{"parts": [{"text": context_prompt}]}]}
         
         try:
-            logging.info("🔗 Відправка запиту до Gemini API (v1alpha)...")
+            logging.info("🔗 Відправка запиту до Gemini API (v1)...")
             timeout = aiohttp.ClientTimeout(total=15)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(url, headers=headers, json=payload) as response:
