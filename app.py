@@ -207,7 +207,7 @@ async def handle_message(message: types.Message):
         await message.answer(reply_text)
 
         if is_voice_input:
-            print("🎙️ Generation голосової відповіді...")
+            print("🎙️ Генерація голосової відповіді...")
             audio_path = missy.generate_voice(reply_text)
             if audio_path and os.path.exists(audio_path):
                 voice_file = FSInputFile(audio_path)
@@ -238,4 +238,4 @@ async def main():
     webhook_path = f"/webhook/{TELEGRAM_TOKEN}"
     app.router.add_post(webhook_path, handle_webhook)
     
-    render_url = f"https://onrender.com{webhook_path}"
+    render_url = f"https://missy-black-bot.onrender.com{webhook_path}"
