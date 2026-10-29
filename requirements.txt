@@ -1,2 +1,5 @@
-aiogram==3.13.0
+google-genai
+aiogram
 aiohttp
+gtts
+pydub
