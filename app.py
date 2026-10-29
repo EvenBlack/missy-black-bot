@@ -81,12 +81,8 @@ class UltimateSecureMissy:
         clean_message = self.sanitize_input(user_message)
         context_prompt = f"{SYSTEM_PROMPT}\n{role_info}\nВКАЗІВКА: Відповідай коротко і по суті.\nПОВІДОМЛЕННЯ: {clean_message}"
         
-        # ВИПРАВЛЕНО: Додано точний офіційний шлях /v1beta/models/gemini-1.5-flash:generateContent
         url = "https://googleapis.com"
-        headers = {
-            "Content-Type": "application/json",
-            "x-goog-api-key": self.api_key
-        }
+        headers = {"Content-Type": "application/json", "x-goog-api-key": self.api_key}
         payload = {"contents": [{"parts": [{"text": context_prompt}]}]}
         
         try:
@@ -136,13 +132,14 @@ async def cmd_start(message: types.Message):
 
 @dp.message(Command("auth"))
 async def cmd_auth(message: types.Message):
-    args = message.text.split(maxsplit=1)
-    if len(args) < 2:
+    # ВИПРАВЛЕНО: Безпечне отримання пароля без зрізів списків
+    raw_text = message.text or ""
+    password = raw_text.replace("/auth", "").strip()
+    user_id = message.from_user.id
+    
+    if not password:
         await message.answer("Вкажіть пароль: `/auth твій_пароль`")
         return
-    
-    password = "".join(args[1:]).strip()
-    user_id = message.from_user.id
     
     if password == ACCESS_PASSWORD:
         AUTHENTICATED_SESSIONS.add(user_id)
@@ -208,7 +205,7 @@ async def main():
     webhook_path = f"/webhook/{TELEGRAM_TOKEN}"
     app.router.add_post(webhook_path, handle_webhook)
     
-    render_url = f"https://onrender.com{webhook_path}"
+    render_url = f"https://missy-black-bot.onrender.com{webhook_path}"
     await bot.delete_webhook(drop_pending_updates=True)
     await asyncio.sleep(1)
     
