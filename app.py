@@ -12,7 +12,7 @@ from aiogram.types import FSInputFile
 from gtts import gTTS
 from pydub import AudioSegment
 
-TELEGRAM_TOKEN = "9159735497:AAGsU-6WA2YHPXjN7mQLjmGR42Imnfg5lvk"
+TELEGRAM_TOKEN = "9159735497:AAE6uPof9mZo99jGKRh0riEFY6mEvRyPNyQ"
 ACCESS_PASSWORD = "Kwb425_vitalii_secure_missy_kwb425" 
 
 AUTHORIZED_USERS = {
