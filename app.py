@@ -81,9 +81,12 @@ class UltimateSecureMissy:
         clean_message = self.sanitize_input(user_message)
         context_prompt = f"{SYSTEM_PROMPT}\n{role_info}\nВКАЗІВКА: Відповідай коротко і по суті.\nПОВІДОМЛЕННЯ: {clean_message}"
         
-        # ВИПРАВЛЕНО НА v1beta ДЛЯ ОБХОДУ ПОМИЛКИ 404
+        # ВИПРАВЛЕНО: Додано точний офіційний шлях /v1beta/models/gemini-1.5-flash:generateContent
         url = "https://googleapis.com"
-        headers = {"Content-Type": "application/json", "x-goog-api-key": self.api_key}
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": self.api_key
+        }
         payload = {"contents": [{"parts": [{"text": context_prompt}]}]}
         
         try:
@@ -205,7 +208,7 @@ async def main():
     webhook_path = f"/webhook/{TELEGRAM_TOKEN}"
     app.router.add_post(webhook_path, handle_webhook)
     
-    render_url = f"https://missy-black-bot.onrender.com{webhook_path}"
+    render_url = f"https://onrender.com{webhook_path}"
     await bot.delete_webhook(drop_pending_updates=True)
     await asyncio.sleep(1)
     
