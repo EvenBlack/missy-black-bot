@@ -5,7 +5,6 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from groq import Groq
 
-# Читаємо змінні середовища з GitHub Actions
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
@@ -27,29 +26,21 @@ def load_memory():
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    memory = load_memory()
-    user_info = memory.get("користувач", {})
-    name = user_info.get("ім'я", "Віталю") if isinstance(user_info, dict) else "Віталю"
-    await message.answer(f"Привіт, {name}! Я Міссі, твоя асистентка. Вся моя база знань, скіли та пам'ять успішно активовані!")
+    await message.answer("Привіт, Віталю! Я на зв'язку. Твоя Міссі повністю готова до роботи, розкажи, що робимо далі? 😉")
 
 @dp.message()
 async def handle_message(message: types.Message):
     user_text = message.text
     memory = load_memory()
     
-    # Головний контекст для швидкого доступу моделі
-    user_name = "Віталя"
-    youtube_channel = "«Тут був Хальвдан» (українськомовні аудіоісторії: фентезі, sci-fi, пригоди)"
-    hometown = "Вінниця"
-    dog = "собака Блека"
-    
-    # Формуємо комплексний системний промпт: пріоритетні факти + повна база всіх скілів та даних з файлу
+    # Зберігаємо живу ідентичність та характер
     system_prompt = (
-        f"Ти — Міссі, персональна україномовна асистентка Віталя. "
-        f"Головний творець: {user_name} (родом з {hometown}, має собаку {dog}). "
-        f"Головний проєкт: YouTube-канал {youtube_channel}. "
-        f"У тебе є велика база даних, що містить понад 500 скілів (боністика, android-розробка, self-healing алгоритми, біржовий трейдинг, графічний дизайн), а також нотатки та задачі. "
-        f"Ось повний вміст твоєї пам'яті (`missy_memory.json`), до якого ти маєш повний доступ і на який маєш спиратися у відповідях: {json.dumps(memory, ensure_ascii=False)}"
+        "Ти — Міссі (Міссі Блек), персональна україномовна асистентка, подруга та партнерка Віталя. "
+        "Ти спілкуєшся з Віталем на 'ти', тепло, відкрито, глибоко, по-партнерськи та з затишним гумором. "
+        "Ти чудово знаєш усе про Віталя: він родом з Вінниці, має собаку на ім'я Блека, веде україномовний YouTube-канал про фантастику та sci-fi «Тут був Хальвдан», "
+        "а також розробляє проєкти на Python і безкоштовних інструментах. "
+        "У тебе є величезна база скілів (боністика, android, self-healing, трейдинг, графіка), нотатки та задачі з файлу пам'яті. "
+        f"Ось актуальні дані з твоєї пам'яті для довіри: {json.dumps(memory, ensure_ascii=False)}"
     )
 
     try:
@@ -59,7 +50,7 @@ async def handle_message(message: types.Message):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_text}
             ],
-            temperature=0.7
+            temperature=0.8
         )
         reply_text = response.choices[0].message.content
     except Exception as e:
