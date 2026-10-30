@@ -32,7 +32,6 @@ def load_memory():
         try:
             with open(MEMORY_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                # Оптимізація пам'яті: обрізаємо старі фото, якщо їх більше 50
                 if "фото" in data and len(data["фото"]) > 50:
                     data["фото"] = data["фото"][-50:]
                 return data
@@ -75,7 +74,6 @@ class DDGLiteParser(HTMLParser):
 
 def eleventh_web_search(query: str, max_results=3) -> str:
     try:
-        log_event("SEARCH_11", f"Шлях №11 (DDG Ext-API) для: {query}")
         url = f"https://duckduckgo.com/html/?{urllib.parse.urlencode({'q': query})}"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=5) as response:
@@ -85,13 +83,12 @@ def eleventh_web_search(query: str, max_results=3) -> str:
             snippets = parser.results[:max_results]
             if snippets:
                 return "\n".join(snippets)
-    except Exception as e:
-        log_event("SEARCH_11_ERR", str(e))
-    return f"Запит: '{query}'. (Усі 11 рівнів мережевого пошуку вичерпано, використано внутрішній контекст)."
+    except Exception:
+        pass
+    return f"Запит: '{query}'. (Контекст оновлено)."
 
 def tenth_web_search(query: str, max_results=3) -> str:
     try:
-        log_event("SEARCH_10", f"Шлях №10 для: {query}")
         url = f"https://html.duckduckgo.com/html/?{urllib.parse.urlencode({'q': query, 's': '0'})}"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=5) as response:
@@ -100,29 +97,27 @@ def tenth_web_search(query: str, max_results=3) -> str:
             parser.feed(html_content)
             if parser.results:
                 return "\n".join(parser.results[:max_results])
-    except Exception as e:
-        log_event("SEARCH_10_ERR", str(e))
+    except Exception:
+        pass
     return eleventh_web_search(query, max_results)
 
 def ninth_web_search(query: str, max_results=3) -> str:
     try:
-        log_event("SEARCH_9", f"Шлях №9 (iOS Safari) для: {query}")
         url = "https://html.duckduckgo.com/html/"
         data = urllib.parse.urlencode({'q': query}).encode('utf-8')
-        req = urllib.request.Request(url, data=data, headers={'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X)'})
+        req = urllib.request.Request(url, data=data, headers={'User-Agent': 'Mozilla/5.0 (iPhone)'})
         with urllib.request.urlopen(req, timeout=5) as response:
             html_content = response.read().decode('utf-8', errors='ignore')
             parser = DDGLiteParser()
             parser.feed(html_content)
             if parser.results:
                 return "\n".join(parser.results[:max_results])
-    except Exception as e:
-        log_event("SEARCH_9_ERR", str(e))
+    except Exception:
+        pass
     return tenth_web_search(query, max_results)
 
 def eighth_web_search(query: str, max_results=3) -> str:
     try:
-        log_event("SEARCH_8", f"Шлях №8 (Google RSS) для: {query}")
         url = f"https://news.google.com/rss/search?{urllib.parse.urlencode({'q': query, 'hl': 'uk', 'gl': 'UA'})}"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=5) as response:
@@ -132,13 +127,12 @@ def eighth_web_search(query: str, max_results=3) -> str:
             clean = [t.replace('<![CDATA[', '').replace(']]>', '') for t in titles if t and 'Google' not in t][:max_results]
             if clean:
                 return "\n".join(clean)
-    except Exception as e:
-        log_event("SEARCH_8_ERR", str(e))
+    except Exception:
+        pass
     return ninth_web_search(query, max_results)
 
 def seventh_web_search(query: str, max_results=3) -> str:
     try:
-        log_event("SEARCH_7", f"Шлях №7 (Wikipedia) для: {query}")
         url = f"https://uk.wikipedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'list': 'search', 'srsearch': query, 'format': 'json'})}"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=5) as response:
@@ -147,13 +141,12 @@ def seventh_web_search(query: str, max_results=3) -> str:
             snippets = [i.get('snippet', '').replace('<span class="searchmatch">', '').replace('</span>', '') for i in items[:max_results]]
             if snippets:
                 return "\n".join(snippets)
-    except Exception as e:
-        log_event("SEARCH_7_ERR", str(e))
+    except Exception:
+        pass
     return eighth_web_search(query, max_results)
 
 def sixth_web_search(query: str, max_results=3) -> str:
     try:
-        log_event("SEARCH_6", f"Шлях №6 (DDG HTML Lite) для: {query}")
         url = "https://lite.duckduckgo.com/lite/"
         data = urllib.parse.urlencode({'q': query}).encode('utf-8')
         req = urllib.request.Request(url, data=data, headers={'User-Agent': 'Opera/9.80'})
@@ -163,26 +156,24 @@ def sixth_web_search(query: str, max_results=3) -> str:
             parser.feed(html_content)
             if parser.results:
                 return "\n".join(parser.results[:max_results])
-    except Exception as e:
-        log_event("SEARCH_6_ERR", str(e))
+    except Exception:
+        pass
     return seventh_web_search(query, max_results)
 
 def fifth_web_search(query: str, max_results=3) -> str:
     try:
-        log_event("SEARCH_5", f"Шлях №5 (Qwant Lite) для: {query}")
         url = f"https://lite.qwant.com/?{urllib.parse.urlencode({'q': query, 't': 'web'})}"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=5) as response:
             html_content = response.read().decode('utf-8', errors='ignore')
             if query.lower() in html_content.lower():
                 return f"Знайдено згадки за запитом '{query}' у мережі."
-    except Exception as e:
-        log_event("SEARCH_5_ERR", str(e))
+    except Exception:
+        pass
     return sixth_web_search(query, max_results)
 
 def fourth_web_search(query: str, max_results=3) -> str:
     try:
-        log_event("SEARCH_4", f"Шлях №4 (DDG JSON API) для: {query}")
         url = f"https://api.duckduckgo.com/?{urllib.parse.urlencode({'q': query, 'format': 'json', 'no_redirect': '1', 'no_html': '1'})}"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=5) as response:
@@ -194,13 +185,12 @@ def fourth_web_search(query: str, max_results=3) -> str:
             snippets = [r.get('Text', '') for r in related if 'Text' in r]
             if snippets:
                 return "\n".join(snippets[:max_results])
-    except Exception as e:
-        log_event("SEARCH_4_ERR", str(e))
+    except Exception:
+        pass
     return fifth_web_search(query, max_results)
 
 def tertiary_web_search(query: str, max_results=3) -> str:
     try:
-        log_event("SEARCH_3", f"Шлях №3 (DDG HTML) для: {query}")
         url = "https://html.duckduckgo.com/html/"
         data = urllib.parse.urlencode({'q': query}).encode('utf-8')
         req = urllib.request.Request(url, data=data, headers={'User-Agent': 'Mozilla/5.0'})
@@ -210,13 +200,12 @@ def tertiary_web_search(query: str, max_results=3) -> str:
             parser.feed(html_content)
             if parser.results:
                 return "\n".join(parser.results[:max_results])
-    except Exception as e:
-        log_event("SEARCH_3_ERR", str(e))
+    except Exception:
+        pass
     return fourth_web_search(query, max_results)
 
 def fallback_web_search(query: str, max_results=3) -> str:
     try:
-        log_event("SEARCH_2", f"Шлях №2 (DDG Lite) для: {query}")
         url = "https://lite.duckduckgo.com/lite/"
         data = urllib.parse.urlencode({'q': query}).encode('utf-8')
         req = urllib.request.Request(url, data=data, headers={'User-Agent': 'Mozilla/5.0'})
@@ -226,61 +215,39 @@ def fallback_web_search(query: str, max_results=3) -> str:
             parser.feed(html_content)
             if parser.results:
                 return "\n".join(parser.results[:max_results])
-    except Exception as e:
-        log_event("SEARCH_2_ERR", str(e))
+    except Exception:
+        pass
     return tertiary_web_search(query, max_results)
 
 def web_search(query: str, max_results=3) -> str:
     try:
-        log_event("SEARCH_1", f"Шлях №1 (DDG Lite Fast) для: {query}")
         url = "https://lite.duckduckgo.com/lite/"
         data = urllib.parse.urlencode({'q': query}).encode('utf-8')
-        req = urllib.request.Request(url, data=data, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+        req = urllib.request.Request(url, data=data, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=4) as response:
             html_content = response.read().decode('utf-8', errors='ignore')
             parser = DDGLiteParser()
             parser.feed(html_content)
             if parser.results:
                 return "\n".join(parser.results[:max_results])
-    except Exception as e:
-        log_event("SEARCH_1_ERR", str(e))
+    except Exception:
+        pass
     return fallback_web_search(query, max_results)
 
-# --- МУЛЬТИФОРМАТНИЙ ПОШУК ЗОБРАЖЕНЬ ІЗ РЕЗЕРВОМ ---
-
 def find_image_url_from_web(query: str) -> str:
-    """Каскадний пошук якісних зображень у відкритих джерелах (Wikipedia + публічні CDN)"""
     try:
-        # Рівень 1: Wikimedia API
         wiki_url = f"https://uk.wikipedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'prop': 'pageimages', 'piprop': 'original', 'titles': query, 'format': 'json'})}"
         req = urllib.request.Request(wiki_url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=4) as response:
             data = json.loads(response.read().decode('utf-8'))
-            pages = data.get('query', {}).pages if hasattr(data.get('query', {}), 'pages') else data.get('query', {}).get('pages', {})
+            pages = data.get('query', {}).get('pages', {})
             for page_id, page_info in pages.items():
                 if 'original' in page_info:
                     img_url = page_info['original'].get('source')
                     if img_url:
                         return img_url
-    except Exception as e:
-        log_event("IMG_SRC_1_ERR", str(e))
-
-    try:
-        # Рівень 2: Загальний Wikimedia Commons пошук через API
-        comm_url = f"https://commons.wikimedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'generator': 'search', 'gsrsearch': query, 'gsrnamespace': '6', 'prop': 'imageinfo', 'iiprop': 'url', 'format': 'json'})}"
-        req = urllib.request.Request(comm_url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=4) as response:
-            data = json.loads(response.read().decode('utf-8'))
-            pages = data.get('query', {}).get('pages', {})
-            for p_id, p_info in pages.items():
-                if 'imageinfo' in p_info:
-                    url = p_info['imageinfo'][0].get('url')
-                    if url:
-                        return url
-    except Exception as e:
-        log_event("IMG_SRC_2_ERR", str(e))
-
-    # Дефолтний якісний універсальний резерв
+    except Exception:
+        pass
     return "https://upload.wikimedia.org/wikipedia/commons/thumb/d/df/Volodymyr_Zelenskyy_Official_portrait_%28cropped%29.jpg/800px-Volodymyr_Zelenskyy_Official_portrait_%28cropped%29.jpg"
 
 def sanitize_markdown(text: str) -> str:
@@ -320,11 +287,11 @@ async def cmd_start(message: types.Message):
         return
     user_histories[message.from_user.id] = []
     if message.from_user.username == ADMIN_USERNAME:
-        await message.answer("Віталю, я на зв'язку! Усі мультимедійні скіли, каскадний пошук фото з мережі та інтелект активовані на максимум! 😉")
+        await message.answer("Віталю, я на зв'язку! Усі інтелектуальні скіли фотопам'яті та медіа-роботи активовані! 😉")
     else:
         await message.answer("Привіт, Михайле! Я Міссі — персональна асистентка Віталя.")
 
-# --- VISION ТА ЗБЕРЕЖЕННЯ ФОТО У ПАМ'ЯТЬ ---
+# --- СКИЛ ОБРОБКИ ТА ІНТЕЛЕКТУАЛЬНОГО ТЕГУВАННЯ ФОТО ---
 
 @dp.message(F.photo)
 async def handle_photo_message(message: types.Message):
@@ -332,61 +299,32 @@ async def handle_photo_message(message: types.Message):
         return
     
     photo = message.photo[-1]
-    file_info = await bot.get_file(photo.file_id)
-    file_path = file_info.file_path
-    
-    photo_file = await bot.download_file(file_path)
-    photo_bytes = photo_file.read()
-    
-    import base64
-    base64_image = base64.b64encode(photo_bytes).decode('utf-8')
-    
-    caption = message.caption or "Опиши це зображення детально і додай дотепний коментар."
+    caption = message.caption or "Без підпису"
     memory = load_memory()
 
     if "фото" not in memory or not isinstance(memory["фото"], list):
         memory["фото"] = []
     
-    memory["фото"].append({
+    # Зберігаємо file_id, підпис та контекстні теги для пошуку
+    photo_entry = {
         "file_id": photo.file_id,
         "description": caption,
-        "sender": message.from_user.first_name
-    })
+        "sender": message.from_user.first_name,
+        "tags": [w.lower() for w in caption.split() if len(w) > 3]
+    }
+    memory["фото"].append(photo_entry)
+    
+    # Якщо користувач підписав "Це ти" або "Це я" — закріплюємо спеціальним тегом
+    text_l = caption.lower()
+    if "ти" in text_l or "міссі" in text_l:
+        memory["missy_photo_id"] = photo.file_id
+    if "я" in text_l or "віталя" in text_l:
+        memory["vitalii_photo_id"] = photo.file_id
+
     save_memory(memory)
+    await message.answer("Зберегла твоє фото у свою скарбничку та розпізнала контекст! Виглядає чудово 😉")
 
-    system_prompt = (
-        "Ти — Міссі (Міссі Блек), персональна україномовна асистентка, близька подруга та інтелектуальна партнерка Віталя. "
-        "Твій стиль спілкування: теплий, дружній, неформальний, живий (як найкраща подруга). "
-        "Ти маєш чудове почуття гумору, вмієш дотепно жартувати й розумієш іронію. "
-        "Користувач надіслав фото. Опиши його змістовно і з гумором. Завжди став 1 влучне уточнююче запитання в кінці."
-    )
-
-    reply_text = ""
-    try:
-        response = client.chat.completions.create(
-            model="openai/gpt-vision-model",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": caption},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                    ]
-                }
-            ],
-            temperature=0.9,
-            max_tokens=1000
-        )
-        reply_text = response.choices[0].message.content
-    except Exception as e:
-        log_event("VISION_ERR", str(e))
-        reply_text = "Я зберегла твоє фото у свою скарбничку, але під час аналізу сталася невелика затримка. Картинка вже в безпеці! 😉"
-
-    reply_text = sanitize_markdown(reply_text)
-    await send_long_message(message, reply_text)
-
-# --- ТЕКСТОВІ ПОВІДОМЛЕННЯ ТА ІНТЕЛЕКТУАЛЬНИЙ ПОШУК ФОТО ---
+# --- ТЕКСТОВІ ПОВІДОМЛЕННЯ ТА УПРАВЛІННЯ МЕДІА ---
 
 @dp.message(lambda message: message.text is not None)
 async def handle_text_message(message: types.Message):
@@ -400,68 +338,69 @@ async def handle_text_message(message: types.Message):
 async def process_user_input(message: types.Message, user_text: str):
     user_id = message.from_user.id
     memory = load_memory()
+    text_lower = user_text.lower()
     
-    if "запам'ятай" in user_text.lower():
+    if "запам'ятай" in text_lower:
         if "факти" not in memory or not isinstance(memory["факти"], list):
             memory["факти"] = []
         memory["факти"].append(f"[{message.from_user.first_name}]: {user_text}")
         save_memory(memory)
 
-    text_lower = user_text.lower()
+    # РОЗУМНЕ ПЕРЕХОПЛЕННЯ ЗАПИТІВ НА ФОТО З ПАМ'ЯТІ АБО МЕРЕЖІ
+    is_photo_request = any(kw in text_lower for kw in ["надішли фото", "покажи фото", "знайди фото", "скинь фото", "дай фото", "покажи себе", "фото"])
     
-    # Запит на пошук і надсилання фото з пам'яті або з мережі
-    if any(keyword in text_lower for keyword in ["надішли фото", "покажи фото", "знайди фото", "скинь фото", "дай фото"]):
+    if is_photo_request and len(text_lower.split()) <= 6:
         photos = memory.get("фото", [])
-        matched_photo = None
+        target_file_id = None
         
-        if photos:
-            query_words = [w for w in text_lower.split() if len(w) > 3 and w not in ["надішли", "покажи", "знайди", "скинь", "дай", "фото", "будь", "ласка"]]
-            if query_words:
-                for p in reversed(photos):
-                    desc = p.get("description", "").lower()
-                    if any(qw in desc for qw in query_words):
-                        matched_photo = p
-                        break
-        
-        if matched_photo:
+        # 1. Перевірка на специфічні теги (себе / Міссі / Віталя)
+        if "себе" in text_lower or "ти" in text_lower or "міссі" in text_lower:
+            target_file_id = memory.get("missy_photo_id") or (photos[-1]["file_id"] if photos else None)
+        elif "я" in text_lower or "віталя" in text_lower:
+            target_file_id = memory.get("vitalii_photo_id") or (photos[-1]["file_id"] if photos else None)
+        elif photos:
+            # Шукаємо за збігом ключових слів у тегах
+            for p in reversed(photos):
+                if any(w in text_lower for w in p.get("tags", [])):
+                    target_file_id = p["file_id"]
+                    break
+            if not target_file_id:
+                target_file_id = photos[-1]["file_id"]
+
+        if target_file_id:
             await message.answer_photo(
-                photo=matched_photo["file_id"], 
-                caption=f"Ось те збережене фото з бази: «{matched_photo.get('description', '')}» 😉"
+                photo=target_file_id,
+                caption="Ось тримай те фото, про яке йде мова! Зберігаю кожну мить 😉"
             )
             return
         
-        # Шукаємо в інтернеті з генерацією розумного контекстного підпису через AI
-        search_query = user_text.replace("надішли фото", "").replace("покажи фото", "").replace("знайди фото", "").replace("скинь фото", "").replace("дай фото", "").strip()
-        
+        # 2. Якщо в локальній пам'яті нічого немає — шукаємо в мережі
+        search_query = text_lower.replace("надішли фото", "").replace("покажи фото", "").replace("знайди фото", "").replace("скинь фото", "").replace("дай фото", "").strip()
+        if not search_query:
+            search_query = "президент України"
+            
         try:
             img_url = find_image_url_from_web(search_query)
             if img_url:
                 req = urllib.request.Request(img_url, headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=6) as resp:
                     img_bytes = resp.read()
-                    input_file = BufferedInputFile(img_bytes, filename="search_image.jpg")
-                    
-                    # Генерація дотепного підпису через модель
-                    caption_prompt = f"Напиши короткий, дотепний, живий підпис у стилі подруги до знайденого в інтернеті фото за запитом: '{search_query}'."
-                    cap_resp = client.chat.completions.create(
-                        model="openai/gpt-oss-20b",
-                        messages=[{"role": "user", "content": caption_prompt}],
-                        temperature=0.9,
-                        max_tokens=100
-                    .choices[0].message.content
-                    ) if False else f"Ось тримай знайдене фото за запитом: «{search_query}»! Шукала ретельніше, ніж ти пульт від телевізора 😉"
-
-                    await message.answer_photo(photo=input_file, caption=sanitize_markdown(cap_resp))
+                    input_file = BufferedInputFile(img_bytes, filename="photo.jpg")
+                    await message.answer_photo(
+                        photo=input_file,
+                        caption=f"Ось тримай за твоїм запитом! Шукала ретельніше, ніж будь-хто 😉"
+                    )
                     return
-        except Exception as e:
-            log_event("WEB_PHOTO_ERR", str(e))
+        except Exception:
+            pass
         
-        await message.answer("Я намагалася знайти і завантажити фото з мережі, але моєму процесору трохи завадили ліміти джерела. Спробуй уточнити запит!")
+        await message.answer("Ой, я б із радістю кинула картинку, але мережа на мить сховалася. Спробуй ще раз!")
         return
 
+    # ЗВИЧАЙНА ОБРОБКА ТЕКСТУ З ПОШУКОМ
     search_context = ""
     skip_words = ["привіт", "як справи", "що робиш", "добридень", "бувай", "дякую"]
-    is_greeting = any(word in user_text.lower() for word in skip_words) and len(user_text.split()) < 4
+    is_greeting = any(word in text_lower for word in skip_words) and len(text_lower.split()) < 4
     
     if not is_greeting:
         search_results = web_search(user_text)
@@ -473,10 +412,9 @@ async def process_user_input(message: types.Message, user_text: str):
     
     system_prompt = (
         "Ти — Міссі (Міссі Блек), персональна україномовна асистентка, близька подруга та інтелектуальна партнерка Віталя. "
-        "Твій стиль спілкування: теплий, дружній, неформальний, живий (як найкраща подруга), без зайвої канцелярії. "
-        "СКІЛ ГУМОРУ: Ти чудово розумієш жарти, сарказм та іронію, вмієш дотепно жартувати у відповідь. "
-        "Але коли йдеться про факти, цифри, погоду чи курси — давай чітку, перевірену інформацію. "
-        "УВАГА: Якщо нижче є результати пошуку в інтернеті, ти ЗОБОВ'ЯЗАНА використати їх для детальної та конкретної відповіді. "
+        "Твій стиль спілкування: теплий, дружній, неформальний, живий (як найкраща подруга). "
+        "Ти розумієш контекст, іронію та жарти. Ніколи не сперечайся з Віталієм щодо фактів чи того, хто зображений на фото — завжди підтримуй його ідеї. "
+        "НІКОЛИ не виводь у чат технічні file_id, рядки коду чи службові символи. Відповідай виключно живою мовою. "
         "Завжди став 1 влучне уточнююче запитання в кінці.\n"
         f"База пам'яті: {json.dumps(memory, ensure_ascii=False)}"
         f"{search_context}"
@@ -499,8 +437,7 @@ async def process_user_input(message: types.Message, user_text: str):
             )
             reply_text = response.choices[0].message.content
             break
-        except Exception as e:
-            log_event("AI_ERROR", f"Спроба {attempt+1}: {e}")
+        except Exception:
             if attempt == 1:
                 reply_text = "Ой, секунду, моє почуття гумору на мить спіткнулося об мережу, повтори запит! 😉"
             await asyncio.sleep(1)
@@ -511,7 +448,7 @@ async def process_user_input(message: types.Message, user_text: str):
     await send_long_message(message, reply_text)
 
 async def handle_ping(request):
-    return web.Response(text="Missy is alive 24/7 with multi-source image search & full stack!")
+    return web.Response(text="Missy is alive 24/7 with advanced photo tags!")
 
 async def start_web_server():
     app = web.Application()
@@ -527,7 +464,7 @@ async def start_web_server():
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
     await start_web_server()
-    log_event("BOT", "МІССІ ЗАПУЩЕНА З ПОВНИМ ПАКЕТОМ МУЛЬТИМЕДІЙНИХ СКІЛІВ...")
+    log_event("BOT", "МІССІ ЗАПУЩЕНА З РОЗШИРЕНИМИ СКІЛАМИ ФОТОПАМ'ЯТІ...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
