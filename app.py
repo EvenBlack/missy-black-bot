@@ -5,7 +5,7 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from groq import Groq
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -37,7 +37,7 @@ def save_memory(memory_data):
     except Exception:
         pass
 
-# Функція безплатного пошуку в інтернеті через DuckDuckGo
+# Функція безплатного пошуку в інтернеті
 def web_search(query: str, max_results=3) -> str:
     try:
         with DDGS() as ddgs:
@@ -68,7 +68,7 @@ async def cmd_start(message: types.Message):
         return
     user_histories[message.from_user.id] = []
     if message.from_user.username == ADMIN_USERNAME:
-        await message.answer("Привіт, Віталю! Права адміністратора підтверджено. Інтернет-пошук готовий до інтеграції! 😉")
+        await message.answer("Віталю, права адміністратора підтверджено. Міссі працює 24/7 з доступом до інтернету! 😉")
     else:
         await message.answer("Привіт, Михайле! Я Міссі — персональна асистентка Віталя.")
 
@@ -91,7 +91,6 @@ async def process_user_input(message: types.Message, user_text: str):
         memory["факти"].append(f"[{message.from_user.first_name}]: {user_text}")
         save_memory(memory)
 
-    # Якщо користувач питає про щось свіже або просить знайти в інтернеті, робимо пошук
     search_context = ""
     trigger_words = ["знайди в інтернеті", "що там в новинах", "курс", "погода", "хто такий", "що це таке", "пошукай"]
     if any(word in user_text.lower() for word in trigger_words):
@@ -144,7 +143,7 @@ async def start_web_server():
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
     await start_web_server()
-    print("МІССІ ЗАПУЩЕНА 24/7 З ІНТЕРНЕТОМ...")
+    print("МІССІ ЗАПУЩЕНА 24/7...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
