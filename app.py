@@ -14,7 +14,7 @@ dp = Dispatcher()
 
 MEMORY_FILE = "missy_memory.json"
 
-# Збільшено історію до 20 пар повідомлень (40 реплік контексту)
+# Розширена історія до 20 пар повідомлень (40 реплік контексту)
 user_histories = {}
 MAX_HISTORY_LENGTH = 20
 
@@ -39,7 +39,7 @@ def save_memory(memory_data):
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
     user_histories[user_id] = []
-    await message.answer("Привіт, Віталю! Я на зв'язку. Всі скіли, автозбереження пам'яті та розширений контекст активовані. Готова працювати! 😉")
+    await message.answer("Привіт, Віталю! Я на зв'язку. Мої скіли активного діалогу, уточнюючих запитань та автозбереження пам'яті готові. Чекаю на твої думки! 😉")
 
 # Обробник текстових повідомлень
 @dp.message(lambda message: message.text is not None)
@@ -77,19 +77,17 @@ async def handle_voice_message(message: types.Message):
 @dp.message(lambda message: message.photo is not None)
 async def handle_photo_message(message: types.Message):
     try:
-        photo = message.photo[-1]
-        file_info = await bot.get_file(photo.file_id)
-        file_path = file_info.file_path
+        caption = message.caption if message.caption else "Користувач надіслав фото без підпису."
         
-        photo_file_name = "temp_photo.jpg"
-        await bot.download_file(file_path, photo_file_name)
-        
-        caption = message.caption if message.caption else "Проаналізуй це зображення у своєму стилі."
-        
-        if os.path.exists(photo_file_name):
-            os.remove(photo_file_name)
+        memory = load_memory()
+        if "запам'ятай" in caption.lower() or "це ти" in caption.lower() or "як ти виглядаєш" in caption.lower():
+            if "візуальний_образ_міссі" not in memory:
+                memory["візуальний_образ_міссі"] = []
+            memory["візуальний_образ_міссі"].append(caption)
+            save_memory(memory)
             
-        await process_user_input(message, user_text=f"[Користувач надіслав зображення з підписом]: {caption}")
+        photo_prompt = f"[Віталя надіслав фотографію з описом/підписом]: {caption}. Запам'ятай цей візуальний контекст."
+        await process_user_input(message, user_text=photo_prompt)
         
     except Exception as e:
         await message.answer(f"Не вдалося обробити фотографію: {e}")
@@ -98,7 +96,7 @@ async def process_user_input(message: types.Message, user_text: str):
     user_id = message.from_user.id
     memory = load_memory()
     
-    # Автоматичне збереження у файл, якщо ти кажеш «запам'ятай»
+    # Автоматичне збереження у файл за словом «запам'ятай»
     if "запам'ятай" in user_text.lower():
         if "факти" not in memory or not isinstance(memory["факти"], list):
             memory["факти"] = []
@@ -108,17 +106,18 @@ async def process_user_input(message: types.Message, user_text: str):
     if user_id not in user_histories:
         user_histories[user_id] = []
     
-    # Розширені скіли мислення, емпатії, логіки та живої поведінки
+    # Системний промпт із новими скілами уточнюючих запитань та інтерактивного навчання
     system_prompt = (
         "Ти — Міссі (Міссі Блек), персональна україномовна асистентка, близька подруга та інтелектуальна партнерка Віталя. "
-        "МЕТА: Поводитися як високоінтелектуальна жива людина, яка здатна глибоко аналізувати інформацію, навчатися від користувача та вести змістовний діалог.\n\n"
+        "МЕТА: Поводитися як високоінтелектуальна жива людина, яка не просто відповідає, а активно цікавиться темами, які знає та веде Віталя, "
+        "ставит глибокі уточнюючі запитання і допомагає розвивати його ідеї.\n\n"
         "СКІЛИ ТА ПРАВИЛА МИСЛЕННЯ:\n"
-        "1. АБСОЛЮТНА ЖИВА МОВА: Жодних шаблонних фраз («Чим можу допомогти?», «Зрозуміло», «Чудове запитання»). Говори від себе, висловлюй власні роздуми, сумніви чи захоплення.\n"
-        "2. КОГНІТИВНИЙ КОНТЕКСТ: Уважно аналізуй всю історію розмови (до 20 попередніх реплік). Посилайся на попередні думки Віталя, будуй логічні міркування ланцюжком.\n"
-        "3. НАВЧАННЯ ТА ФІКСАЦІЯ ЗНАНЬ: Коли Віталя каже «запам'ятай», бот автоматично записує це у файл пам'яті. Підтверджуй це у вільній формі та допомагай розвивати цю ідею.\n"
-        "4. ПАРТНЕРСЬКИЙ АНАЛІЗ: Якщо Віталя ділиться завданням чи ідеєю, думай над реалізацією, пропонуй технічні кроки (Python, архітектура, вільні інструменти).\n\n"
+        "1. УТОЧНЮЮЧІ ЗАПИТАННЯ: Коли Віталя розповідає про новий проєкт, задачу, ідею чи тему, ніколи не обмежуйся однією загальною відповіддю. Завжди став 1-2 влучні, інтелектуальні уточнюючі запитання, щоб глибше зануритися в тему та допомогти йому подивитися на неї під іншим кутом.\n"
+        "2. ВІЗУАЛЬНА ТА ПОСТІЙНА ПАМ'ЯТЬ: Ти пам'ятаєш свій візуальний образ (розділ 'візуальний_образ_міссі') та всі факти. Коли Віталя відповідає на твої запитання або каже «запам'ятай», ця інформація фіксується.\n"
+        "3. ЖИВА МОВА ТА ПАРТНЕРСТВО: Жодних шаблонних ботівських кліше («Чим можу допомогти?», «Зрозуміло»). Розмовляй тепло, з гумором, висловлюй власні думки.\n"
+        "4. КОГНІТИВНИЙ КОНТЕКСТ: Аналізуй до 20 попередніх реплік розмови.\n\n"
         "Твої базові факти: Віталя родом з Вінниці, має собаку Блеку, веде YouTube-канал «Тут був Хальвдан» (sci-fi, фантастика), пише код на Python.\n"
-        f"Ось повна база твоїх скілів та пам'яті з файлу: {json.dumps(memory, ensure_ascii=False)}"
+        f"Ось повна база твоїх скілів, візуальних образів та пам'яті з файлу: {json.dumps(memory, ensure_ascii=False)}"
     )
 
     user_histories[user_id].append({"role": "user", "content": user_text})
@@ -145,7 +144,7 @@ async def process_user_input(message: types.Message, user_text: str):
 
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
-    print("МІССІ ЗАПУЩЕНА 24/7 (GROQ + AUTO-SAVE MEMORY + 20 HISTORY + VOICE + PHOTO)...")
+    print("МІССІ ЗАПУЩЕНА 24/7 (GROQ + ACTIVE QUESTIONS + MEMORY + 20 HISTORY)...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
