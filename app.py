@@ -12,11 +12,11 @@ logging.basicConfig(level=logging.INFO)
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Ініціалізація Telegram-бота
+# Ініціалізація Telegram-бота та диспетчера
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
-# Налаштування клієнта Groq (використовуємо безкоштовний шлюз Groq API)
+# Налаштування клієнта Groq через OpenAI-сумісний шлюз
 groq_client = AsyncOpenAI(
     api_key=GROQ_API_KEY, base_url="https://api.groq.com/openai/v1"
 )
@@ -29,25 +29,25 @@ async def handle_message(message: Message):
   logging.info(f"Отримано повідомлення: {user_text}")
 
   try:
-    # Запит напряму до Groq API з актуальною робочою моделлю
+    # Запит до Groq API з робочою моделлю
     response = await groq_client.chat.completions.create(
-        model="llama-3.1-8b-instant",
+        model="mixtral-8x7b-32768",
         messages=[{"role": "user", "content": user_text}],
     )
     reply_text = response.choices[0].message.content
 
-    # Надсилаємо відповідь Міссі в Telegram
+    # Надсилаємо відповідь у Telegram
     await message.answer(reply_text)
 
   except Exception as e:
     logging.error(f"Помилка при зверненні до Groq: {e}")
     await message.answer(
-        "Ой, вибач, сталася помилка при зверненні до Groq API... 🤖"
+        "Ой, сталася помилка при зверненні до штучного інтелекту... 🤖"
     )
 
 
 async def main():
-  # Очищаємо старі сесії перед запуском, щоб уникнути конфліктів
+  # Очищаємо старі сесії та вебхуки перед запуском
   await bot.delete_webhook(drop_pending_updates=True)
   logging.info("Бот Міссі успішно запускається на Groq API...")
 
