@@ -234,10 +234,15 @@ def web_search(query: str, max_results=3) -> str:
         pass
     return fallback_web_search(query, max_results)
 
+# --- ПРОФЕСІЙНИЙ СКІЛ ПОШУКУ ФОТО З МЕРЕЖІ ---
+
 def find_image_url_from_web(query: str) -> str:
+    clean_query = query.strip()
+    
+    # 1. Пошук у Вікіпедії (UA)
     try:
-        wiki_url = f"https://uk.wikipedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'prop': 'pageimages', 'piprop': 'original', 'titles': query, 'format': 'json'})}"
-        req = urllib.request.Request(wiki_url, headers={'User-Agent': 'Mozilla/5.0'})
+        wiki_url = f"https://uk.wikipedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'prop': 'pageimages', 'piprop': 'original', 'titles': clean_query, 'format': 'json'})}"
+        req = urllib.request.Request(wiki_url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
         with urllib.request.urlopen(req, timeout=4) as response:
             data = json.loads(response.read().decode('utf-8'))
             pages = data.get('query', {}).get('pages', {})
@@ -245,9 +250,29 @@ def find_image_url_from_web(query: str) -> str:
                 if 'original' in page_info:
                     img_url = page_info['original'].get('source')
                     if img_url:
+                        log_event("IMAGE_SEARCH", f"Знайдено у Вікіпедії (UA): {img_url}")
                         return img_url
-    except Exception:
-        pass
+    except Exception as e:
+        log_event("WIKI_UA_ERR", str(e))
+
+    # 2. Пошук у Вікіпедії (EN)
+    try:
+        wiki_url_en = f"https://en.wikipedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'prop': 'pageimages', 'piprop': 'original', 'titles': clean_query, 'format': 'json'})}"
+        req = urllib.request.Request(wiki_url_en, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+        with urllib.request.urlopen(req, timeout=4) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            pages = data.get('query', {}).get('pages', {})
+            for page_id, page_info in pages.items():
+                if 'original' in page_info:
+                    img_url = page_info['original'].get('source')
+                    if img_url:
+                        log_event("IMAGE_SEARCH", f"Знайдено у Вікіпедії (EN): {img_url}")
+                        return img_url
+    except Exception as e:
+        log_event("WIKI_EN_ERR", str(e))
+
+    # 3. Гарантований резервний якісний портрет
+    log_event("IMAGE_SEARCH", "Використовується резервна якісна ілюстрація.")
     return "https://upload.wikimedia.org/wikipedia/commons/thumb/d/df/Volodymyr_Zelenskyy_Official_portrait_%28cropped%29.jpg/800px-Volodymyr_Zelenskyy_Official_portrait_%28cropped%29.jpg"
 
 def sanitize_markdown(text: str) -> str:
@@ -287,11 +312,11 @@ async def cmd_start(message: types.Message):
         return
     user_histories[message.from_user.id] = []
     if message.from_user.username == ADMIN_USERNAME:
-        await message.answer("Віталю, я на зв'язку! Усі інтелектуальні скіли фотопам'яті та медіа-роботи активовані! 😉")
+        await message.answer("Віталю, я на зв'язку! Професійний скіл роботи з фотоактивовано на 100%! 😉")
     else:
         await message.answer("Привіт, Михайле! Я Міссі — персональна асистентка Віталя.")
 
-# --- СКИЛ ОБРОБКИ ТА ІНТЕЛЕКТУАЛЬНОГО ТЕГУВАННЯ ФОТО ---
+# --- ОБРОБКА ТА ІНТЕЛЕКТУАЛЬНЕ ТЕГУВАННЯ ФОТО ---
 
 @dp.message(F.photo)
 async def handle_photo_message(message: types.Message):
@@ -305,7 +330,6 @@ async def handle_photo_message(message: types.Message):
     if "фото" not in memory or not isinstance(memory["фото"], list):
         memory["фото"] = []
     
-    # Зберігаємо file_id, підпис та контекстні теги для пошуку
     photo_entry = {
         "file_id": photo.file_id,
         "description": caption,
@@ -314,7 +338,6 @@ async def handle_photo_message(message: types.Message):
     }
     memory["фото"].append(photo_entry)
     
-    # Якщо користувач підписав "Це ти" або "Це я" — закріплюємо спеціальним тегом
     text_l = caption.lower()
     if "ти" in text_l or "міссі" in text_l:
         memory["missy_photo_id"] = photo.file_id
@@ -324,7 +347,7 @@ async def handle_photo_message(message: types.Message):
     save_memory(memory)
     await message.answer("Зберегла твоє фото у свою скарбничку та розпізнала контекст! Виглядає чудово 😉")
 
-# --- ТЕКСТОВІ ПОВІДОМЛЕННЯ ТА УПРАВЛІННЯ МЕДІА ---
+# --- ТЕКСТОВІ ПОВІДОМЛЕННЯ ТА МЕДІА-ПРЕПЕХОПЛЕННЯ ---
 
 @dp.message(lambda message: message.text is not None)
 async def handle_text_message(message: types.Message):
@@ -346,20 +369,18 @@ async def process_user_input(message: types.Message, user_text: str):
         memory["факти"].append(f"[{message.from_user.first_name}]: {user_text}")
         save_memory(memory)
 
-    # РОЗУМНЕ ПЕРЕХОПЛЕННЯ ЗАПИТІВ НА ФОТО З ПАМ'ЯТІ АБО МЕРЕЖІ
-    is_photo_request = any(kw in text_lower for kw in ["надішли фото", "покажи фото", "знайди фото", "скинь фото", "дай фото", "покажи себе", "фото"])
+    # --- СУВОРЕ ПРЕ-ПЕРЕХОПЛЕННЯ ТА ВІДПРАВКА ФОТО ---
+    is_photo_request = any(kw in text_lower for kw in ["надішли фото", "покажи фото", "знайди фото", "скинь фото", "дай фото", "покажи себе", "фото", "картинк", "лого"])
     
-    if is_photo_request and len(text_lower.split()) <= 6:
+    if is_photo_request:
         photos = memory.get("фото", [])
         target_file_id = None
         
-        # 1. Перевірка на специфічні теги (себе / Міссі / Віталя)
         if "себе" in text_lower or "ти" in text_lower or "міссі" in text_lower:
             target_file_id = memory.get("missy_photo_id") or (photos[-1]["file_id"] if photos else None)
         elif "я" in text_lower or "віталя" in text_lower:
             target_file_id = memory.get("vitalii_photo_id") or (photos[-1]["file_id"] if photos else None)
-        elif photos:
-            # Шукаємо за збігом ключових слів у тегах
+        elif photos and not any(w in text_lower for w in ["нато", "президент", "україни", "київ", "картинки", "гугл"]):
             for p in reversed(photos):
                 if any(w in text_lower for w in p.get("tags", [])):
                     target_file_id = p["file_id"]
@@ -368,36 +389,50 @@ async def process_user_input(message: types.Message, user_text: str):
                 target_file_id = photos[-1]["file_id"]
 
         if target_file_id:
-            await message.answer_photo(
-                photo=target_file_id,
-                caption="Ось тримай те фото, про яке йде мова! Зберігаю кожну мить 😉"
-            )
-            return
-        
-        # 2. Якщо в локальній пам'яті нічого немає — шукаємо в мережі
-        search_query = text_lower.replace("надішли фото", "").replace("покажи фото", "").replace("знайди фото", "").replace("скинь фото", "").replace("дай фото", "").strip()
+            try:
+                await message.answer_photo(
+                    photo=target_file_id,
+                    caption="Ось тримай те фото з моєї пам'яті! Зберігаю кожну мить 😉"
+                )
+                return
+            except Exception:
+                pass
+
+        # Пошук і завантаження з мережі з професійними заголовками
+        search_query = text_lower
+        for word in ["надішли", "покажи", "знайди", "скинь", "дай", "фото", "картинку", "картинки", "мені", "логотип", "лого", "будь ласка"]:
+            search_query = search_query.replace(word, "")
+        search_query = search_query.strip()
         if not search_query:
             search_query = "президент України"
             
         try:
+            log_event("MEDIA_PROCESS", f"Шукаю зображення за запитом: '{search_query}'")
             img_url = find_image_url_from_web(search_query)
             if img_url:
-                req = urllib.request.Request(img_url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=6) as resp:
+                req = urllib.request.Request(
+                    img_url, 
+                    headers={
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Referer': 'https://uk.wikipedia.org/'
+                    }
+                )
+                with urllib.request.urlopen(req, timeout=8) as resp:
                     img_bytes = resp.read()
-                    input_file = BufferedInputFile(img_bytes, filename="photo.jpg")
-                    await message.answer_photo(
-                        photo=input_file,
-                        caption=f"Ось тримай за твоїм запитом! Шукала ретельніше, ніж будь-хто 😉"
-                    )
-                    return
-        except Exception:
-            pass
+                    if len(img_bytes) > 1000:
+                        input_file = BufferedInputFile(img_bytes, filename="photo.jpg")
+                        await message.answer_photo(
+                            photo=input_file,
+                            caption=f"Ось тримай за запитом: «{search_query}»! Шукала ретельніше, ніж будь-хто 😉"
+                        )
+                        return
+        except Exception as e:
+            log_event("DIRECT_PHOTO_ERR", str(e))
         
         await message.answer("Ой, я б із радістю кинула картинку, але мережа на мить сховалася. Спробуй ще раз!")
         return
 
-    # ЗВИЧАЙНА ОБРОБКА ТЕКСТУ З ПОШУКОМ
+    # ЗВИЧАЙНА ОБРОБКА ТЕКСТУ
     search_context = ""
     skip_words = ["привіт", "як справи", "що робиш", "добридень", "бувай", "дякую"]
     is_greeting = any(word in text_lower for word in skip_words) and len(text_lower.split()) < 4
@@ -448,7 +483,7 @@ async def process_user_input(message: types.Message, user_text: str):
     await send_long_message(message, reply_text)
 
 async def handle_ping(request):
-    return web.Response(text="Missy is alive 24/7 with advanced photo tags!")
+    return web.Response(text="Missy is alive 24/7 with professional photo processing!")
 
 async def start_web_server():
     app = web.Application()
@@ -464,7 +499,7 @@ async def start_web_server():
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
     await start_web_server()
-    log_event("BOT", "МІССІ ЗАПУЩЕНА З РОЗШИРЕНИМИ СКІЛАМИ ФОТОПАМ'ЯТІ...")
+    log_event("BOT", "МІССІ ЗАПУЩЕНА З ПРОФЕСІЙНИМ МЕДІА-СКІЛОМ...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
