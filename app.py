@@ -5,7 +5,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from groq import Groq
 
-# Читаємо ключі зі змінних середовища GitHub Actions
+# Читаємо змінні середовища з GitHub Actions
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
@@ -42,8 +42,9 @@ async def handle_message(message: types.Message):
     )
 
     try:
+        # Використовуємо актуальну та стабільну модель з підтримкою через Groq API
         response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model="openai/gpt-oss-20b",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_text}
