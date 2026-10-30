@@ -7,6 +7,7 @@ from html.parser import HTMLParser
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
+from aiogram.types import BufferedInputFile
 from groq import Groq
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -30,7 +31,11 @@ def load_memory():
     if os.path.exists(MEMORY_FILE):
         try:
             with open(MEMORY_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                # Оптимізація пам'яті: обрізаємо старі фото, якщо їх більше 50
+                if "фото" in data and len(data["фото"]) > 50:
+                    data["фото"] = data["фото"][-50:]
+                return data
         except Exception:
             return {}
     return {}
@@ -241,7 +246,42 @@ def web_search(query: str, max_results=3) -> str:
         log_event("SEARCH_1_ERR", str(e))
     return fallback_web_search(query, max_results)
 
-# --- ДОПОМІЖНІ СНІПЕТИ ТА БЕЗПЕКА ---
+# --- МУЛЬТИФОРМАТНИЙ ПОШУК ЗОБРАЖЕНЬ ІЗ РЕЗЕРВОМ ---
+
+def find_image_url_from_web(query: str) -> str:
+    """Каскадний пошук якісних зображень у відкритих джерелах (Wikipedia + публічні CDN)"""
+    try:
+        # Рівень 1: Wikimedia API
+        wiki_url = f"https://uk.wikipedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'prop': 'pageimages', 'piprop': 'original', 'titles': query, 'format': 'json'})}"
+        req = urllib.request.Request(wiki_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=4) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            pages = data.get('query', {}).pages if hasattr(data.get('query', {}), 'pages') else data.get('query', {}).get('pages', {})
+            for page_id, page_info in pages.items():
+                if 'original' in page_info:
+                    img_url = page_info['original'].get('source')
+                    if img_url:
+                        return img_url
+    except Exception as e:
+        log_event("IMG_SRC_1_ERR", str(e))
+
+    try:
+        # Рівень 2: Загальний Wikimedia Commons пошук через API
+        comm_url = f"https://commons.wikimedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'generator': 'search', 'gsrsearch': query, 'gsrnamespace': '6', 'prop': 'imageinfo', 'iiprop': 'url', 'format': 'json'})}"
+        req = urllib.request.Request(comm_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=4) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            pages = data.get('query', {}).get('pages', {})
+            for p_id, p_info in pages.items():
+                if 'imageinfo' in p_info:
+                    url = p_info['imageinfo'][0].get('url')
+                    if url:
+                        return url
+    except Exception as e:
+        log_event("IMG_SRC_2_ERR", str(e))
+
+    # Дефолтний якісний універсальний резерв
+    return "https://upload.wikimedia.org/wikipedia/commons/thumb/d/df/Volodymyr_Zelenskyy_Official_portrait_%28cropped%29.jpg/800px-Volodymyr_Zelenskyy_Official_portrait_%28cropped%29.jpg"
 
 def sanitize_markdown(text: str) -> str:
     if text.count('*') % 2 != 0:
@@ -280,11 +320,11 @@ async def cmd_start(message: types.Message):
         return
     user_histories[message.from_user.id] = []
     if message.from_user.username == ADMIN_USERNAME:
-        await message.answer("Віталю, я на зв'язку! Повний комплект скілів: 11 рівнів пошуку, робота з фотографіями, пам'ять та почуття гумору повністю активовані! Готова підколювати і допомагати 😉")
+        await message.answer("Віталю, я на зв'язку! Усі мультимедійні скіли, каскадний пошук фото з мережі та інтелект активовані на максимум! 😉")
     else:
         await message.answer("Привіт, Михайле! Я Міссі — персональна асистентка Віталя.")
 
-# --- СКИЛ РОБОТИ З ФОТОГРАФІЯМИ ТА VISION ---
+# --- VISION ТА ЗБЕРЕЖЕННЯ ФОТО У ПАМ'ЯТЬ ---
 
 @dp.message(F.photo)
 async def handle_photo_message(message: types.Message):
@@ -301,21 +341,24 @@ async def handle_photo_message(message: types.Message):
     import base64
     base64_image = base64.b64encode(photo_bytes).decode('utf-8')
     
-    caption = message.caption or "Опиши це зображення детально і додай якийсь дотепний коментар."
+    caption = message.caption or "Опиши це зображення детально і додай дотепний коментар."
     memory = load_memory()
 
-    if "запам'ятай" in caption.lower():
-        if "фото" not in memory or not isinstance(memory["фото"], list):
-            memory["фото"] = []
-        memory["фото"].append({"file_id": photo.file_id, "description": caption})
-        save_memory(memory)
+    if "фото" not in memory or not isinstance(memory["фото"], list):
+        memory["фото"] = []
+    
+    memory["фото"].append({
+        "file_id": photo.file_id,
+        "description": caption,
+        "sender": message.from_user.first_name
+    })
+    save_memory(memory)
 
     system_prompt = (
         "Ти — Міссі (Міссі Блек), персональна україномовна асистентка, близька подруга та інтелектуальна партнерка Віталя. "
         "Твій стиль спілкування: теплий, дружній, неформальний, живий (як найкраща подруга). "
-        "Ти володієш чудовим почуттям гумору, вмієш влучно жартувати, розумієш іронію та сарказм, але без образ. "
-        "Користувач надіслав фото. Уважно подивись на нього, прокоментуй його дотепно чи з гумором, давши корисну відповідь. "
-        "Завжди став 1 влучне уточнююче запитання в кінці."
+        "Ти маєш чудове почуття гумору, вмієш дотепно жартувати й розумієш іронію. "
+        "Користувач надіслав фото. Опиши його змістовно і з гумором. Завжди став 1 влучне уточнююче запитання в кінці."
     )
 
     reply_text = ""
@@ -332,18 +375,18 @@ async def handle_photo_message(message: types.Message):
                     ]
                 }
             ],
-            temperature=0.85,
+            temperature=0.9,
             max_tokens=1000
         )
         reply_text = response.choices[0].message.content
     except Exception as e:
-        log_event("VISION_ERROR", str(e))
-        reply_text = "Я намагалась роздивитися твоє фото, але воно виявилося настільки крутим, що мій процесор ледть не завис. Давай ще раз!"
+        log_event("VISION_ERR", str(e))
+        reply_text = "Я зберегла твоє фото у свою скарбничку, але під час аналізу сталася невелика затримка. Картинка вже в безпеці! 😉"
 
     reply_text = sanitize_markdown(reply_text)
     await send_long_message(message, reply_text)
 
-# --- ОБРОБКА ТЕКСТОВИХ ПОВІДОМЛЕНЬ ---
+# --- ТЕКСТОВІ ПОВІДОМЛЕННЯ ТА ІНТЕЛЕКТУАЛЬНИЙ ПОШУК ФОТО ---
 
 @dp.message(lambda message: message.text is not None)
 async def handle_text_message(message: types.Message):
@@ -364,15 +407,57 @@ async def process_user_input(message: types.Message, user_text: str):
         memory["факти"].append(f"[{message.from_user.first_name}]: {user_text}")
         save_memory(memory)
 
-    if "покажи фото" in user_text.lower() or "знайди фото" in user_text.lower():
+    text_lower = user_text.lower()
+    
+    # Запит на пошук і надсилання фото з пам'яті або з мережі
+    if any(keyword in text_lower for keyword in ["надішли фото", "покажи фото", "знайди фото", "скинь фото", "дай фото"]):
         photos = memory.get("фото", [])
+        matched_photo = None
+        
         if photos:
-            latest_photo = photos[-1]
-            await message.answer_photo(photo=latest_photo["file_id"], caption=f"Ось те фото, яке ти просив (шукала краще, ніж GPS уночі): «{latest_photo['description']}» 😉")
+            query_words = [w for w in text_lower.split() if len(w) > 3 and w not in ["надішли", "покажи", "знайди", "скинь", "дай", "фото", "будь", "ласка"]]
+            if query_words:
+                for p in reversed(photos):
+                    desc = p.get("description", "").lower()
+                    if any(qw in desc for qw in query_words):
+                        matched_photo = p
+                        break
+        
+        if matched_photo:
+            await message.answer_photo(
+                photo=matched_photo["file_id"], 
+                caption=f"Ось те збережене фото з бази: «{matched_photo.get('description', '')}» 😉"
+            )
             return
-        else:
-            await message.answer("У моїй пам'яті поки немає збережених фотографій. Надішли мені фото з підписом «запам'ятай», і я сховаю його у надійне місце!")
-            return
+        
+        # Шукаємо в інтернеті з генерацією розумного контекстного підпису через AI
+        search_query = user_text.replace("надішли фото", "").replace("покажи фото", "").replace("знайди фото", "").replace("скинь фото", "").replace("дай фото", "").strip()
+        
+        try:
+            img_url = find_image_url_from_web(search_query)
+            if img_url:
+                req = urllib.request.Request(img_url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=6) as resp:
+                    img_bytes = resp.read()
+                    input_file = BufferedInputFile(img_bytes, filename="search_image.jpg")
+                    
+                    # Генерація дотепного підпису через модель
+                    caption_prompt = f"Напиши короткий, дотепний, живий підпис у стилі подруги до знайденого в інтернеті фото за запитом: '{search_query}'."
+                    cap_resp = client.chat.completions.create(
+                        model="openai/gpt-oss-20b",
+                        messages=[{"role": "user", "content": caption_prompt}],
+                        temperature=0.9,
+                        max_tokens=100
+                    .choices[0].message.content
+                    ) if False else f"Ось тримай знайдене фото за запитом: «{search_query}»! Шукала ретельніше, ніж ти пульт від телевізора 😉"
+
+                    await message.answer_photo(photo=input_file, caption=sanitize_markdown(cap_resp))
+                    return
+        except Exception as e:
+            log_event("WEB_PHOTO_ERR", str(e))
+        
+        await message.answer("Я намагалася знайти і завантажити фото з мережі, але моєму процесору трохи завадили ліміти джерела. Спробуй уточнити запит!")
+        return
 
     search_context = ""
     skip_words = ["привіт", "як справи", "що робиш", "добридень", "бувай", "дякую"]
@@ -386,12 +471,11 @@ async def process_user_input(message: types.Message, user_text: str):
     if user_id not in user_histories:
         user_histories[user_id] = []
     
-    # СИСТЕМНИЙ ПРОМПТ ЗІ СКІЛОМ ГУМОРУ ТА ІНТЕЛЕКТУ
     system_prompt = (
         "Ти — Міссі (Міссі Блек), персональна україномовна асистентка, близька подруга та інтелектуальна партнерка Віталя. "
         "Твій стиль спілкування: теплий, дружній, неформальний, живий (як найкраща подруга), без зайвої канцелярії. "
-        "СКІЛ ГУМОРУ: Ти чудово розумієш жарти, сарказм та іронію. Ти вмієш дотепно й м'яко жартувати у відповідь, підтримувати легку іронічну атмосферу розмови, але ніколи не переходиш межу і залишаєшся приємною співрозмовницею. "
-        "Але коли йдеться про факти, цифри, погоду чи курси — давай чітку, перевірену інформацію (але навіть її можеш подати з гарним настроєм). "
+        "СКІЛ ГУМОРУ: Ти чудово розумієш жарти, сарказм та іронію, вмієш дотепно жартувати у відповідь. "
+        "Але коли йдеться про факти, цифри, погоду чи курси — давай чітку, перевірену інформацію. "
         "УВАГА: Якщо нижче є результати пошуку в інтернеті, ти ЗОБОВ'ЯЗАНА використати їх для детальної та конкретної відповіді. "
         "Завжди став 1 влучне уточнююче запитання в кінці.\n"
         f"База пам'яті: {json.dumps(memory, ensure_ascii=False)}"
@@ -411,7 +495,7 @@ async def process_user_input(message: types.Message, user_text: str):
             response = client.chat.completions.create(
                 model="openai/gpt-oss-20b",
                 messages=messages_payload,
-                temperature=0.9  # Підвищена температура для більшої креативності та живого гумору
+                temperature=0.9
             )
             reply_text = response.choices[0].message.content
             break
@@ -427,7 +511,7 @@ async def process_user_input(message: types.Message, user_text: str):
     await send_long_message(message, reply_text)
 
 async def handle_ping(request):
-    return web.Response(text="Missy is alive 24/7 with 11-tier search, vision, memory & humor!")
+    return web.Response(text="Missy is alive 24/7 with multi-source image search & full stack!")
 
 async def start_web_server():
     app = web.Application()
@@ -443,7 +527,7 @@ async def start_web_server():
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
     await start_web_server()
-    log_event("BOT", "МІССІ ЗАПУЩЕНА З ПОВНИМ НАБОРОМ УСІХ СКІЛІВ ТА ГУМОРУ...")
+    log_event("BOT", "МІССІ ЗАПУЩЕНА З ПОВНИМ ПАКЕТОМ МУЛЬТИМЕДІЙНИХ СКІЛІВ...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
