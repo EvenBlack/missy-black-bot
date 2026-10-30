@@ -20,29 +20,39 @@ def load_memory():
         try:
             with open(MEMORY_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:
+        except Exception as e:
+            print(f"Помилка читання пам'яті: {e}")
             return {}
     return {}
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     memory = load_memory()
-    name = memory.get("користувач", "Віталю")
-    await message.answer(f"Привіт, {name}! Я Міссі, твоя асистентка. Я на зв'язку і готова спілкуватися.")
+    user_info = memory.get("користувач", {})
+    name = user_info.get("ім'я", "Віталю") if isinstance(user_info, dict) else "Віталю"
+    await message.answer(f"Привіт, {name}! Я Міссі, твоя асистентка. Вся моя база знань, скіли та пам'ять успішно активовані!")
 
 @dp.message()
 async def handle_message(message: types.Message):
     user_text = message.text
     memory = load_memory()
     
+    # Головний контекст для швидкого доступу моделі
+    user_name = "Віталя"
+    youtube_channel = "«Тут був Хальвдан» (українськомовні аудіоісторії: фентезі, sci-fi, пригоди)"
+    hometown = "Вінниця"
+    dog = "собака Блека"
+    
+    # Формуємо комплексний системний промпт: пріоритетні факти + повна база всіх скілів та даних з файлу
     system_prompt = (
-        "Ти — Міссі, персональна україномовна асистентка Віталя. "
-        "Твоє завдання — допомагати йому та запам'ятовувати важливу інформацію про нього. "
-        f"Ось що ти наразі знаєш про користувача: {json.dumps(memory, ensure_ascii=False)}"
+        f"Ти — Міссі, персональна україномовна асистентка Віталя. "
+        f"Головний творець: {user_name} (родом з {hometown}, має собаку {dog}). "
+        f"Головний проєкт: YouTube-канал {youtube_channel}. "
+        f"У тебе є велика база даних, що містить понад 500 скілів (боністика, android-розробка, self-healing алгоритми, біржовий трейдинг, графічний дизайн), а також нотатки та задачі. "
+        f"Ось повний вміст твоєї пам'яті (`missy_memory.json`), до якого ти маєш повний доступ і на який маєш спиратися у відповідях: {json.dumps(memory, ensure_ascii=False)}"
     )
 
     try:
-        # Використовуємо актуальну та стабільну модель з підтримкою через Groq API
         response = client.chat.completions.create(
             model="openai/gpt-oss-20b",
             messages=[
