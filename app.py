@@ -3,53 +3,55 @@ import logging
 import os
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
-from google import genai
+from openai import AsyncOpenAI
 
-# Налаштування логування
+# Налаштування логування в консоль
 logging.basicConfig(level=logging.INFO)
 
-# Отримуємо змінні середовища
+# Отримуємо змінні середовища з Render
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Ініціалізація бота та диспетчера
+# Ініціалізація Telegram-бота
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
-# Ініціалізація клієнта штучного інтелекту через Groq API
-client = genai.Client(api_key=GROQ_API_KEY)
+# Налаштування клієнта Groq (використовуємо безкоштовний шлюз Groq API)
+groq_client = AsyncOpenAI(
+    api_key=GROQ_API_KEY, base_url="https://api.groq.com/openai/v1"
+)
 
 
-# Обробник будь-яких текстових повідомлень від користувача
+# Обробник усіх текстових повідомлень у чаті
 @dp.message(F.text)
 async def handle_message(message: Message):
   user_text = message.text
-  logging.info(f"Отримано повідомлення від користувача: {user_text}")
+  logging.info(f"Отримано повідомлення: {user_text}")
 
   try:
-    # Запит до штучного інтелекту
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",  # або інша актуальна модель, яку ти використовуєш
-        contents=user_text,
+    # Запит напряму до Groq API
+    response = await groq_client.chat.completions.create(
+        model="llama3-70b-8192",
+        messages=[{"role": "user", "content": user_text}],
     )
-    reply_text = response.text
+    reply_text = response.choices[0].message.content
 
-    # Надсилаємо відповідь назад у Telegram-чат
+    # Надсилаємо відповідь Міссі в Telegram
     await message.answer(reply_text)
+
   except Exception as e:
-    logging.error(f"Помилка при зверненні до ШІ: {e}")
+    logging.error(f"Помилка при зверненні до Groq: {e}")
     await message.answer(
-        "Ой, щось пішло не так при зверненні до мого штучного"
-        " інтелекту... 🤖"
+        "Ой, вибач, сталася помилка при зверненні до Groq API... 🤖"
     )
 
 
 async def main():
-  # Примусово скидаємо старі сесії та вебхуки перед стартом
+  # Очищаємо старі сесії перед запуском, щоб уникнути конфліктів
   await bot.delete_webhook(drop_pending_updates=True)
-  logging.info("Старі сесії скинуто. Бот Міссі успішно запускається...")
+  logging.info("Бот Міссі успішно запускається на Groq API...")
 
-  # Запускаємо опитування (long polling)
+  # Запускаємо постійне опитування Telegram
   await dp.start_polling(bot)
 
 
