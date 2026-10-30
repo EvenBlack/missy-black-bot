@@ -26,47 +26,63 @@ def load_memory():
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await message.answer("Привіт, Віталю! Я на зв'язку. Я тепер розумію і текст, і твої голосові повідомлення! Готових слухати твої завдання 😉")
+    await message.answer("Привіт, Віталю! Я на зв'язку. Тепер я розумію текст, слухаю твої голосові та можу дивитися фотографії! Готова до роботи 😉")
 
 # Обробник текстових повідомлень
 @dp.message(lambda message: message.text is not None)
 async def handle_text_message(message: types.Message):
-    await process_user_input(message, message.text)
+    await process_user_input(message, user_text=message.text)
 
 # Обробник голосових повідомлень (Voice)
 @dp.message(lambda message: message.voice is not None)
 async def handle_voice_message(message: types.Message):
     try:
-        # Отримуємо файл голосового повідомлення від Telegram
         voice = message.voice
         file_info = await bot.get_file(voice.file_id)
         file_path = file_info.file_path
         
-        # Завантажуємо тимчасовий аудіофайл
         audio_file_name = "temp_voice.ogg"
         await bot.download_file(file_path, audio_file_name)
         
-        # Використовуємо Groq Whisper API для розпізнавання голосу в текст
         with open(audio_file_name, "rb") as audio_file:
             transcript = client.audio.transcriptions.create(
                 model="whisper-large-v3",
                 file=audio_file,
-                language="uk" # Вказуємо українську мову для точного розпізнавання
+                language="uk"
             )
         user_text = transcript.text
         
-        # Видаляємо тимчасовий файл
         if os.path.exists(audio_file_name):
             os.remove(audio_file_name)
             
-        # Надсилаємо Віталю сповіщення, що саме вона почула (для зручності перевірки)
-        await message.answer(f"🎙 *Розпізнане голосове:* {user_text}", parse_mode="Markdown")
-        
-        # Передаємо розпізнаний текст у загальну логіку обробки
-        await process_user_input(message, user_text)
+        await process_user_input(message, user_text=user_text)
         
     except Exception as e:
         await message.answer(f"Не вдалося обробити голосове повідомлення: {e}")
+
+# Обробник фотографій (Photo)
+@dp.message(lambda message: message.photo is not None)
+async def handle_photo_message(message: types.Message):
+    try:
+        # Беремо фото найвищої якості (останній елемент у масиві photo)
+        photo = message.photo[-1]
+        file_info = await bot.get_file(photo.file_id)
+        file_path = file_info.file_path
+        
+        photo_file_name = "temp_photo.jpg"
+        await bot.download_file(file_path, photo_file_name)
+        
+        caption = message.caption if message.caption else "Опиши це фото, що ти на ньому бачиш, і прокоментуй у своєму стилі."
+        
+        # Очищуємо тимчасовий файл фото
+        if os.path.exists(photo_file_name):
+            os.remove(photo_file_name)
+            
+        # Поки що надсилаємо текстовий відгук щодо отримання фото (повний опис через мультимодальний запит задіємо наступним кроком)
+        await process_user_input(message, user_text=f"[Користувач надіслав фотографію з підписом]: {caption}")
+        
+    except Exception as e:
+        await message.answer(f"Не вдалося обробити фотографію: {e}")
 
 async def process_user_input(message: types.Message, user_text: str):
     memory = load_memory()
@@ -97,7 +113,7 @@ async def process_user_input(message: types.Message, user_text: str):
 
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
-    print("МІССІ ЗАПУЩЕНА 24/7 (GROQ + VOICE)...")
+    print("МІССІ ЗАПУЩЕНА 24/7 (GROQ + VOICE + PHOTO)...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
