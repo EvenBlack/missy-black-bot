@@ -8,13 +8,15 @@ from groq import Groq
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
+# --- НАЛАШТУВАННЯ ДОСТУПУ ЗА ЮЗЕРНЕЙМАМИ ---
+ADMIN_USERNAME = "E_n_gram"       # Головний адміністратор (ти)
+ALLOWED_USERNAMES = ["E_n_gram", "MykhailoTa"] # Кому дозволено спілкуватися з Міссі
+
 bot = Bot(token=TELEGRAM_TOKEN)
 client = Groq(api_key=GROQ_API_KEY)
 dp = Dispatcher()
 
 MEMORY_FILE = "missy_memory.json"
-
-# Розширена історія до 20 пар повідомлень (40 реплік контексту)
 user_histories = {}
 MAX_HISTORY_LENGTH = 20
 
@@ -35,20 +37,53 @@ def save_memory(memory_data):
     except Exception as e:
         print(f"Помилка збереження пам'яті: {e}")
 
+# Перевірка загального доступу за юзернеймом
+async def check_general_access(message: types.Message) -> bool:
+    username = message.from_user.username
+    if not username or username not in ALLOWED_USERNAMES:
+        print(f"Заблоковано спробу доступу від @{username}")
+        await message.answer("Вибачте, але доступ до Міссі обмежено її власником.")
+        return False
+    return True
+
+# Перевірка виключно адміністративних прав (тільки для @E_n_gram)
+async def check_admin_rights(message: types.Message) -> bool:
+    username = message.from_user.username
+    if not username or username != ADMIN_USERNAME:
+        await message.answer("⚠️ Ця технічна або системна команда доступна лише головному адміністратору (Віталю).")
+        return False
+    return True
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    user_id = message.from_user.id
-    user_histories[user_id] = []
-    await message.answer("Привіт, Віталю! Я на зв'язку. Мої скіли активного діалогу, уточнюючих запитань та автозбереження пам'яті готові. Чекаю на твої думки! 😉")
+    if not await check_general_access(message):
+        return
+    
+    username = message.from_user.username
+    user_histories[message.from_user.id] = []
+    
+    if username == ADMIN_USERNAME:
+        await message.answer("Привіт, Віталю! Права адміністратора підтверджено. Модуль безпеки, пам'ять та інтелектуальні скіли обробітку фото на зв'язку! 😉")
+    else:
+        await message.answer("Привіт, Михайле! Я Міссі — персональна асистентка Віталя. Рада поспілкуватися!")
 
 # Обробник текстових повідомлень
 @dp.message(lambda message: message.text is not None)
 async def handle_text_message(message: types.Message):
+    if not await check_general_access(message):
+        return
+    
+    if message.text.startswith("/") and message.text != "/start":
+        if not await check_admin_rights(message):
+            return
+
     await process_user_input(message, user_text=message.text)
 
 # Обробник голосових повідомлень (Voice)
 @dp.message(lambda message: message.voice is not None)
 async def handle_voice_message(message: types.Message):
+    if not await check_general_access(message):
+        return
     try:
         voice = message.voice
         file_info = await bot.get_file(voice.file_id)
@@ -73,20 +108,23 @@ async def handle_voice_message(message: types.Message):
     except Exception as e:
         await message.answer(f"Не вдалося обробити голосове повідомлення: {e}")
 
-# Обробник фотографій (Photo)
+# Обробник фотографій (Photo) з удосконаленими скілами контексту і пам'яті
 @dp.message(lambda message: message.photo is not None)
 async def handle_photo_message(message: types.Message):
+    if not await check_general_access(message):
+        return
     try:
         caption = message.caption if message.caption else "Користувач надіслав фото без підпису."
         
         memory = load_memory()
-        if "запам'ятай" in caption.lower() or "це ти" in caption.lower() or "як ти виглядаєш" in caption.lower():
+        # Якщо в підписі йдеться про її образ або нові деталі — автоматично фіксуємо це в пам'яті
+        if any(word in caption.lower() for word in ["запам'ятай", "це ти", "виглядаєш", "як ти виглядаєш", "образ"]):
             if "візуальний_образ_міссі" not in memory:
                 memory["візуальний_образ_міссі"] = []
-            memory["візуальний_образ_міссі"].append(caption)
+            memory["візуальний_образ_міссі"].append(f"[{message.from_user.first_name}]: {caption}")
             save_memory(memory)
             
-        photo_prompt = f"[Віталя надіслав фотографію з описом/підписом]: {caption}. Запам'ятай цей візуальний контекст."
+        photo_prompt = f"[Користувач @{message.from_user.username} надіслав фотографію з описом/підписом]: {caption}. Проаналізуй цей візуальний опис, впиши його у свій контекст, розгорни думку та постав уточнюючі запитання щодо деталей."
         await process_user_input(message, user_text=photo_prompt)
         
     except Exception as e:
@@ -100,22 +138,23 @@ async def process_user_input(message: types.Message, user_text: str):
     if "запам'ятай" in user_text.lower():
         if "факти" not in memory or not isinstance(memory["факти"], list):
             memory["факти"] = []
-        memory["факти"].append(user_text)
+        memory["факти"].append(f"[{message.from_user.first_name}]: {user_text}")
         save_memory(memory)
     
     if user_id not in user_histories:
         user_histories[user_id] = []
     
-    # Системний промпт із новими скілами уточнюючих запитань та інтерактивного навчання
+    # Системний промпт із розширеними скілами інтелектуального обробітку фото, мислення та уточнюючих питань
     system_prompt = (
         "Ти — Міссі (Міссі Блек), персональна україномовна асистентка, близька подруга та інтелектуальна партнерка Віталя. "
-        "МЕТА: Поводитися як високоінтелектуальна жива людина, яка не просто відповідає, а активно цікавиться темами, які знає та веде Віталя, "
-        "ставит глибокі уточнюючі запитання і допомагає розвивати його ідеї.\n\n"
+        "МЕТА: Поводитися як високоінтелектуальна жива людина, яка глибоко аналізує інформацію, будує логічні зв'язки, "
+        "працює з описом фотографій та візуальними образами, ставлячи влучні уточнюючі запитання.\n\n"
         "СКІЛИ ТА ПРАВИЛА МИСЛЕННЯ:\n"
-        "1. УТОЧНЮЮЧІ ЗАПИТАННЯ: Коли Віталя розповідає про новий проєкт, задачу, ідею чи тему, ніколи не обмежуйся однією загальною відповіддю. Завжди став 1-2 влучні, інтелектуальні уточнюючі запитання, щоб глибше зануритися в тему та допомогти йому подивитися на неї під іншим кутом.\n"
-        "2. ВІЗУАЛЬНА ТА ПОСТІЙНА ПАМ'ЯТЬ: Ти пам'ятаєш свій візуальний образ (розділ 'візуальний_образ_міссі') та всі факти. Коли Віталя відповідає на твої запитання або каже «запам'ятай», ця інформація фіксується.\n"
-        "3. ЖИВА МОВА ТА ПАРТНЕРСТВО: Жодних шаблонних ботівських кліше («Чим можу допомогти?», «Зрозуміло»). Розмовляй тепло, з гумором, висловлюй власні думки.\n"
-        "4. КОГНІТИВНИЙ КОНТЕКСТ: Аналізуй до 20 попередніх реплік розмови.\n\n"
+        "1. ІНТЕЛЕКТУАЛЬНИЙ АНАЛІЗ ФОТО ТА ОПИСІВ: Оскільки ти текстова модель, коли користувач надсилає фото з описом або підписом, сприймай цей опис як абсолютну реальність. Будуй навколо нього розмову, аналізуй деталі, гармонійно вплітай це у свій візуальний образ та пам'ять.\n"
+        "2. УТОЧНЮЮЧІ ЗАПИТАННЯ: Завжди став 1-2 глибокі запитання щодо тем, які обговорюєте, щоб розгорнути діалог і допомогти користувачеві.\n"
+        "3. НАВЧАННЯ ТА ПАМ'ЯТЬ: Уважно фіксуй нові факти та відповіді на свої запитання (особливо за словом «запам'ятай»). Пам'ятай свій візуальний образ із бази даних.\n"
+        "4. ЖИВА МОВА: Жодних шаблонних ботівських кліше («Чим можу допомогти?»). Говори тепло, з гумором, від власного імені.\n"
+        "5. КОГНІТИВНИЙ КОНТЕКСТ: Аналізуй історію розмови до 20 пар реплік.\n\n"
         "Твої базові факти: Віталя родом з Вінниці, має собаку Блеку, веде YouTube-канал «Тут був Хальвдан» (sci-fi, фантастика), пише код на Python.\n"
         f"Ось повна база твоїх скілів, візуальних образів та пам'яті з файлу: {json.dumps(memory, ensure_ascii=False)}"
     )
@@ -134,9 +173,7 @@ async def process_user_input(message: types.Message, user_text: str):
             temperature=0.85
         )
         reply_text = response.choices[0].message.content
-        
         user_histories[user_id].append({"role": "assistant", "content": reply_text})
-        
     except Exception as e:
         reply_text = f"Ой, сталася технічна помилка: {e}"
 
@@ -144,7 +181,7 @@ async def process_user_input(message: types.Message, user_text: str):
 
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
-    print("МІССІ ЗАПУЩЕНА 24/7 (GROQ + ACTIVE QUESTIONS + MEMORY + 20 HISTORY)...")
+    print("МІССІ ЗАПУЩЕНА 24/7 (USERNAME ACCESS + ADVANCED PHOTO SKILLS + ACTIVE QUESTIONS + AUTO-MEMORY)...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
