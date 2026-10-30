@@ -8,7 +8,6 @@ from groq import Groq
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-PORT = int(os.getenv("PORT", 10000))
 
 ADMIN_USERNAME = "E_n_gram"
 ALLOWED_USERNAMES = ["E_n_gram", "MykhailoTa"]
@@ -106,22 +105,25 @@ async def process_user_input(message: types.Message, user_text: str):
 
     await message.answer(reply_text)
 
-# Вебсервер для Render (тримає порт відкритим)
+# Вебсервер для Render з коректним зчитуванням порту
 async def handle_ping(request):
     return web.Response(text="Missy is alive 24/7!")
 
-async def web_server():
+async def start_web_server():
     app = web.Application()
     app.router.add_get("/", handle_ping)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
+    print(f"Вебсервер успішно запущено на порту {port}")
 
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
-    await web_server()
-    print("МІССІ ЗАПУЩЕНА ЧЕРЕЗ WEB SERVER...")
+    await start_web_server()
+    print("МІССІ ЗАПУЩЕНА 24/7...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
