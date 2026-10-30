@@ -26,14 +26,51 @@ def load_memory():
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await message.answer("Привіт, Віталю! Я на зв'язку. Твоя Міссі повністю готова до роботи, розкажи, що робимо далі? 😉")
+    await message.answer("Привіт, Віталю! Я на зв'язку. Я тепер розумію і текст, і твої голосові повідомлення! Готових слухати твої завдання 😉")
 
-@dp.message()
-async def handle_message(message: types.Message):
-    user_text = message.text
+# Обробник текстових повідомлень
+@dp.message(lambda message: message.text is not None)
+async def handle_text_message(message: types.Message):
+    await process_user_input(message, message.text)
+
+# Обробник голосових повідомлень (Voice)
+@dp.message(lambda message: message.voice is not None)
+async def handle_voice_message(message: types.Message):
+    try:
+        # Отримуємо файл голосового повідомлення від Telegram
+        voice = message.voice
+        file_info = await bot.get_file(voice.file_id)
+        file_path = file_info.file_path
+        
+        # Завантажуємо тимчасовий аудіофайл
+        audio_file_name = "temp_voice.ogg"
+        await bot.download_file(file_path, audio_file_name)
+        
+        # Використовуємо Groq Whisper API для розпізнавання голосу в текст
+        with open(audio_file_name, "rb") as audio_file:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-large-v3",
+                file=audio_file,
+                language="uk" # Вказуємо українську мову для точного розпізнавання
+            )
+        user_text = transcript.text
+        
+        # Видаляємо тимчасовий файл
+        if os.path.exists(audio_file_name):
+            os.remove(audio_file_name)
+            
+        # Надсилаємо Віталю сповіщення, що саме вона почула (для зручності перевірки)
+        await message.answer(f"🎙 *Розпізнане голосове:* {user_text}", parse_mode="Markdown")
+        
+        # Передаємо розпізнаний текст у загальну логіку обробки
+        await process_user_input(message, user_text)
+        
+    except Exception as e:
+        await message.answer(f"Не вдалося обробити голосове повідомлення: {e}")
+
+async def process_user_input(message: types.Message, user_text: str):
     memory = load_memory()
     
-    # Зберігаємо живу ідентичність та характер
     system_prompt = (
         "Ти — Міссі (Міссі Блек), персональна україномовна асистентка, подруга та партнерка Віталя. "
         "Ти спілкуєшся з Віталем на 'ти', тепло, відкрито, глибоко, по-партнерськи та з затишним гумором. "
@@ -60,7 +97,7 @@ async def handle_message(message: types.Message):
 
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
-    print("МІССІ ЗАПУЩЕНА 24/7 (GROQ)...")
+    print("МІССІ ЗАПУЩЕНА 24/7 (GROQ + VOICE)...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
