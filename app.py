@@ -31,7 +31,7 @@ async def handle_message(message: Message):
   try:
     # Запит напряму до Groq API з актуальною робочою моделлю
     response = await groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="llama-3.1-8b-instant",
         messages=[{"role": "user", "content": user_text}],
     )
     reply_text = response.choices[0].message.content
