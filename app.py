@@ -29,9 +29,9 @@ async def handle_message(message: Message):
   logging.info(f"Отримано повідомлення: {user_text}")
 
   try:
-    # Запит до Groq API з робочою моделлю
+    # Запит до Groq API з актуальною робочою моделлю
     response = await groq_client.chat.completions.create(
-        model="mixtral-8x7b-32768",
+        model="llama-3.1-8b-instant",
         messages=[{"role": "user", "content": user_text}],
     )
     reply_text = response.choices[0].message.content
