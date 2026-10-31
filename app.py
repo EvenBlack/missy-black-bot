@@ -1,6 +1,8 @@
+
 import os
 import re
 import json
+import base64
 import asyncio
 import logging
 from html.parser import HTMLParser
@@ -22,15 +24,20 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 OPENVERSE_CLIENT_ID = os.getenv("OPENVERSE_CLIENT_ID")
 OPENVERSE_CLIENT_SECRET = os.getenv("OPENVERSE_CLIENT_SECRET")
+CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID")
+CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN")
+CLOUDFLARE_VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct"
 
 ADMIN_USERNAME = "E_n_gram"
 ALLOWED_USERNAMES = {"E_n_gram", "MykhailoTa"}
 MEMORY_FILE = Path("missy_memory.json")
 MAX_HISTORY = 15
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
-IMAGE_SEARCH_TIMEOUT = 14
+IMAGE_SEARCH_TIMEOUT = 55
+MAX_VISION_CANDIDATES = 2
+VISION_TIMEOUT = aiohttp.ClientTimeout(total=18, connect=5, sock_read=14)
 USER_AGENT = "MissyTelegramBot/2.0 (image search)"
-TIMEOUT = aiohttp.ClientTimeout(total=5, connect=3, sock_read=4)
+TIMEOUT = aiohttp.ClientTimeout(total=8, connect=3, sock_read=6)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s:%(name)s:%(message)s")
 log = logging.getLogger("missy")
@@ -175,7 +182,7 @@ async def search_openverse(session, query):
         payload = await request_json(
             session,
             "https://api.openverse.org/v1/images/",
-            {"q": query, "page_size": 10},
+            {"q": query, "page_size": 12},
             headers,
         )
         results = payload.get("results", [])
@@ -183,15 +190,24 @@ async def search_openverse(session, query):
             key=lambda x: score_result(query, x.get("title", ""), x.get("tags")),
             reverse=True,
         )
+        candidates = []
+        seen = set()
         for item in results:
-            if score_result(query, item.get("title", ""), item.get("tags")) >= 1:
-                url = item.get("url") or item.get("thumbnail")
-                if url:
-                    return {"url": url, "title": item.get("title") or query, "source": "Openverse"}
-        event("IMAGE_CANDIDATES", f"Openverse: 0 relevant from {len(results)} results")
+            url = item.get("url") or item.get("thumbnail")
+            if url and url not in seen and score_result(query, item.get("title", ""), item.get("tags")) >= 1:
+                seen.add(url)
+                candidates.append({
+                    "url": url,
+                    "title": item.get("title") or query,
+                    "source": "Openverse",
+                })
+                if len(candidates) >= 2:
+                    break
+        event("IMAGE_CANDIDATES", f"Openverse: {len(candidates)} candidates from {len(results)} results")
+        return candidates
     except Exception as exc:
         event("OPENVERSE_ERROR", f"{type(exc).__name__}: {exc}")
-    return None
+        return []
 
 
 async def search_wikimedia(session, query):
@@ -199,7 +215,7 @@ async def search_wikimedia(session, query):
         "action": "query", "generator": "search",
         "gsrsearch": f"filetype:bitmap {query}", "gsrnamespace": 6,
         "gsrlimit": 12, "prop": "imageinfo", "iiprop": "url",
-        "iiurlwidth": 1400, "format": "json",
+        "iiurlwidth": 1200, "format": "json",
     }
     try:
         payload = await request_json(
@@ -207,21 +223,24 @@ async def search_wikimedia(session, query):
             params, {"User-Agent": USER_AGENT},
         )
         pages = payload.get("query", {}).get("pages", {}).values()
-        candidates = []
+        ranked = []
         for page in pages:
             title = page.get("title", "")
             info = (page.get("imageinfo") or [{}])[0]
             url = info.get("thumburl") or info.get("url")
             points = score_result(query, title)
             if url and points >= 1:
-                candidates.append((points, title, url))
-        if candidates:
-            points, title, url = sorted(candidates, reverse=True)[0]
-            return {"url": url, "title": title, "source": "Wikimedia Commons"}
-        event("IMAGE_CANDIDATES", "Wikimedia Commons: 0 relevant results")
+                ranked.append((points, title, url))
+        ranked.sort(reverse=True)
+        candidates = [
+            {"url": url, "title": title, "source": "Wikimedia Commons"}
+            for points, title, url in ranked[:2]
+        ]
+        event("IMAGE_CANDIDATES", f"Wikimedia Commons: {len(candidates)} candidates")
+        return candidates
     except Exception as exc:
         event("WIKIMEDIA_ERROR", f"{type(exc).__name__}: {exc}")
-    return None
+        return []
 
 
 async def download_image(session, candidate):
@@ -249,18 +268,86 @@ async def download_image(session, candidate):
     return None
 
 
+async def verify_image_with_cloudflare(data, query):
+    if not CLOUDFLARE_ACCOUNT_ID or not CLOUDFLARE_API_TOKEN:
+        event("VISION_NOT_CONFIGURED", "Cloudflare account ID or API token is missing")
+        return False
+
+    try:
+        with Image.open(BytesIO(data)) as source:
+            image = source.convert("RGB")
+            image.thumbnail((1024, 1024))
+            buffer = BytesIO()
+            image.save(buffer, format="JPEG", quality=85, optimize=True)
+            image_data = "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+        url = (
+            "https://api.cloudflare.com/client/v4/accounts/"
+            f"{CLOUDFLARE_ACCOUNT_ID}/ai/run/{CLOUDFLARE_VISION_MODEL}"
+        )
+        prompt = (
+            "Check whether the image visibly depicts the requested subject. "
+            "Judge only the actual visual content, not the filename, title, or source. "
+            "Be strict: if the requested subject is absent, ambiguous, or only loosely related, reject it. "
+            "Return exactly one JSON object and nothing else: "
+            '{"relevant": true} or {"relevant": false}.\n'
+            f"Requested subject: {query}"
+        )
+        async with aiohttp.ClientSession(timeout=VISION_TIMEOUT) as session:
+            async with session.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "prompt": prompt,
+                    "image": image_data,
+                    "temperature": 0,
+                    "max_tokens": 80,
+                },
+            ) as response:
+                body = await response.json(content_type=None)
+                if response.status >= 400 or not body.get("success", False):
+                    errors = body.get("errors", [])
+                    event("VISION_API_ERROR", f"HTTP {response.status}: {str(errors)[:300]}")
+                    return False
+
+        result = body.get("result") or {}
+        answer = result.get("response", "") if isinstance(result, dict) else str(result)
+        match = re.search(r"\{\s*['\"]?relevant['\"]?\s*:\s*(true|false)\s*\}", answer, re.I)
+        if not match:
+            event("VISION_UNCLEAR", answer[:250])
+            return False
+        relevant = match.group(1).lower() == "true"
+        event("VISION_RESULT", "relevant" if relevant else "rejected")
+        return relevant
+    except asyncio.TimeoutError:
+        event("VISION_TIMEOUT", "Cloudflare Vision request timed out")
+    except Exception as exc:
+        event("VISION_ERROR", f"{type(exc).__name__}: {exc}")
+    return False
+
+
 async def find_image(query):
     async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
-        # Не опитуємо одне джерело багато разів: максимум один запит до кожного.
+        candidates = []
         for searcher in (search_openverse, search_wikimedia):
-            candidate = await searcher(session, query)
-            if candidate:
-                downloaded = await download_image(session, candidate)
-                if downloaded:
-                    data, ext = downloaded
-                    return data, ext, candidate
+            candidates.extend(await searcher(session, query))
+        checked = 0
+        for candidate in candidates:
+            if checked >= MAX_VISION_CANDIDATES:
+                break
+            downloaded = await download_image(session, candidate)
+            if not downloaded:
+                continue
+            data, ext = downloaded
+            checked += 1
+            if await verify_image_with_cloudflare(data, query):
+                event("IMAGE_VERIFIED", f"{candidate['source']}: {candidate['title'][:120]}")
+                return data, ext, candidate
+            event("IMAGE_VISION_REJECTED", candidate["title"][:160])
     return None
-
 
 
 class SearchResultsParser(HTMLParser):
@@ -321,6 +408,7 @@ async def web_search(query):
         event("WEB_SEARCH_ERROR", f"{type(exc).__name__}: {exc}")
         return ""
 
+
 def clean_markdown(text):
     if text.count("*") % 2:
         text = text.replace("*", "")
@@ -347,6 +435,7 @@ async def receive_photo(message: types.Message):
     if not await check_access(message):
         return
     photo = message.photo[-1]
+
     def add(data):
         data["фото"].append({
             "file_id": photo.file_id,
@@ -354,6 +443,7 @@ async def receive_photo(message: types.Message):
             "sender": message.from_user.first_name,
         })
         data["фото"] = data["фото"][-50:]
+
     await change_memory(add)
     await message.answer("Зберегла твоє фото у свою скарбничку! 😉")
 
@@ -375,6 +465,7 @@ async def text_handler(message: types.Message):
         def add_fact(data):
             data["факти"].append(f"[{message.from_user.first_name}]: {text}")
             data["факти"] = data["факти"][-100:]
+
         await change_memory(add_fact)
         memory = load_memory()
 
@@ -388,13 +479,19 @@ async def text_handler(message: types.Message):
             query = text
             event("QUERY_REFINEMENT_TIMEOUT", "Using original query")
 
-        cached = memory.get("image_cache", {}).get(query)
+        # Старий кеш без візуальної перевірки не використовується.
+        # Нові записи мають окремий префікс vision-v1.
+        cache_key = "vision-v1:" + query
+        cached = memory.get("image_cache", {}).get(cache_key)
         if cached:
             try:
-                await message.answer_photo(cached, caption="Ось фото за твоїм запитом! 😉")
+                await message.answer_photo(
+                    cached,
+                    caption="Ось перевірене фото за твоїм запитом! 😉",
+                )
                 history.extend([
                     {"role": "user", "content": text},
-                    {"role": "assistant", "content": "[Фото з кешу]"},
+                    {"role": "assistant", "content": "[Перевірене фото з кешу]"},
                 ])
                 return
             except Exception as exc:
@@ -402,7 +499,10 @@ async def text_handler(message: types.Message):
 
         event("IMAGE_SEARCH", repr(query))
         try:
-            found = await asyncio.wait_for(find_image(query), timeout=IMAGE_SEARCH_TIMEOUT)
+            found = await asyncio.wait_for(
+                find_image(query),
+                timeout=IMAGE_SEARCH_TIMEOUT,
+            )
         except asyncio.TimeoutError:
             found = None
             event("IMAGE_SEARCH_TIMEOUT", f"Search exceeded {IMAGE_SEARCH_TIMEOUT}s")
@@ -416,25 +516,26 @@ async def text_handler(message: types.Message):
                 )
                 if sent.photo:
                     def cache(data_obj):
-                        data_obj["image_cache"][query] = sent.photo[-1].file_id
+                        data_obj["image_cache"][cache_key] = sent.photo[-1].file_id
                         if len(data_obj["image_cache"]) > 100:
                             data_obj["image_cache"].pop(next(iter(data_obj["image_cache"])))
+
                     await change_memory(cache)
                 history.extend([
                     {"role": "user", "content": text},
-                    {"role": "assistant", "content": "[Надіслано справжнє фото]"},
+                    {"role": "assistant", "content": "[Надіслано перевірене фото]"},
                 ])
                 return
             except Exception as exc:
                 event("TELEGRAM_PHOTO_SEND_ERROR", f"{type(exc).__name__}: {exc}")
 
         await message.answer(
-            "Не знайшла відповідного справжнього фото у доступних безкоштовних джерелах. "
+            "Не знайшла фото, яке змогла підтвердити візуально. "
             "Спробуй уточнити запит або сформулювати його інакше."
         )
         history.extend([
             {"role": "user", "content": text},
-            {"role": "assistant", "content": "[Фото не знайдено]"},
+            {"role": "assistant", "content": "[Фото не знайдено або не пройшло перевірку]"},
         ])
         return
 
