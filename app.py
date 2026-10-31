@@ -59,6 +59,7 @@ histories = {}
 memory_lock = asyncio.Lock()
 user_locks = {}
 user_modes = {}
+conversation_versions = {}
 DRIVE_MEMORY_URL = os.getenv("DRIVE_MEMORY_URL", "")
 DRIVE_MEMORY_SECRET = os.getenv("DRIVE_MEMORY_SECRET", "")
 if bool(DRIVE_MEMORY_URL) != bool(DRIVE_MEMORY_SECRET):
@@ -112,10 +113,51 @@ def save_memory(data):
         raise
 
 
+def restore_conversation(uid, memory):
+    record = memory.get("conversations", {}).get(str(uid), {}) if isinstance(memory.get("conversations", {}), dict) else {}
+    if not isinstance(record, dict):
+        return
+    version = record.get("version", 0)
+    if type(version) is not int or version < 0:
+        return
+    items = record.get("messages", [])
+    if not isinstance(items, list):
+        return
+    messages = [
+        {"role": item["role"], "content": item["content"][:2000]}
+        for item in items[-MAX_HISTORY * 2:]
+        if isinstance(item, dict) and item.get("role") in {"user", "assistant"} and isinstance(item.get("content"), str)
+    ]
+    # Never replace in-flight local messages with an older server snapshot.
+    if version >= conversation_versions.get(uid, 0):
+        histories[uid] = messages
+        if record.get("mode") in {"friend", "colleague"}:
+            user_modes[uid] = record["mode"]
+        conversation_versions[uid] = version
+
+
+async def persist_conversation(uid):
+    expected = conversation_versions.get(uid, 0)
+    messages = [dict(role=item["role"], content=item["content"][:2000]) for item in histories.get(uid, [])[-MAX_HISTORY * 2:]]
+    mode = user_modes.get(uid, "friend")
+    def update(data):
+        conversations = data.setdefault("conversations", {})
+        if not isinstance(conversations, dict):
+            raise MemoryUnavailable("INVALID_CONVERSATIONS")
+        current = conversations.get(str(uid), {})
+        if not isinstance(current, dict) or current.get("version", 0) != expected:
+            raise MemoryUnavailable("CONVERSATION_CONFLICT")
+        conversations[str(uid)] = {"messages": messages, "mode": mode, "version": expected + 1}
+    await change_memory(update)
+    conversation_versions[uid] = expected + 1
+
+
 async def read_memory():
     if drive_store is None:
         return load_memory()
     data, _ = await drive_store.read()
+    if getattr(drive_store, "recovered", False) is True:
+        event("MEMORY_RECOVERED", "restored previous valid backup")
     if data is None:
         raise MemoryUnavailable("MEMORY_NOT_INITIALIZED")
     return data
@@ -139,6 +181,7 @@ async def initialize_memory():
                 if data is None:
                     raise MemoryUnavailable("MEMORY_INITIALIZATION_CONFLICT")
         event("MEMORY_BACKEND", "Google Drive connected and initialized")
+        event("MEMORY_BACKUP", "ready" if getattr(drive_store, "backup_ready", False) is True else "script update required")
 
 
 async def change_memory(callback):
@@ -1102,6 +1145,8 @@ async def status_command(message: types.Message):
         memory_status = "Google Drive підключено; дані читаються із зовнішнього сховища" if drive_store else "локальний файл; збереження після заміни контейнера не гарантоване"
     except Exception:
         memory_status = "сховище недоступне; збереження спогадів зараз не підтверджене"
+    if drive_store:
+        memory_status += "; резервний файл " + ("налаштовано" if getattr(drive_store, "backup_ready", False) is True else "ще не налаштовано")
     vision = "налаштована; потрібна перевірка запитом" if CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN else "не налаштована"
     await message.answer(f"Бот працює.\nПам'ять: {memory_status}.\nПеревірка фото: {vision}.\nВебпошук: кілька пошукових джерел; доступність перевіряється під час запиту.")
 
@@ -1143,6 +1188,12 @@ async def text_handler(message: types.Message):
         finally:
             history = histories.get(uid, [])
             history[:] = history[-MAX_HISTORY * 2:]
+            if history:
+                try:
+                    await persist_conversation(uid)
+                except Exception as exc:
+                    event("CONVERSATION_SAVE_ERROR", type(exc).__name__)
+                    await message.answer("Не вдалося зберегти контекст цієї розмови для наступного запуску. Спробуй пізніше.")
 
 
 async def handle_text(message: types.Message):
@@ -1159,6 +1210,8 @@ async def handle_text(message: types.Message):
     history = histories.setdefault(uid, [])
     try:
         memory = await read_memory()
+        restore_conversation(uid, memory)
+        history = histories.setdefault(uid, [])
         memory_error = False
     except RuntimeError:
         memory = {"факти": [], "image_cache": {}, "фото": []}
@@ -1177,10 +1230,9 @@ async def handle_text(message: types.Message):
         except Exception:
             await message.answer("Не змогла записати спогад: сховище пам'яті недоступне або повернуло помилку. Не буду стверджувати, що зберегла його.")
             return
-        if drive_store:
-            await message.answer("Запам'ятала й зберегла цей факт у Google Drive.")
-        else:
-            await message.answer("Записала цей факт у поточний файл пам'яті. Збереження після нового деплою ще потребує зовнішнього сховища.")
+        confirmation = "Запам'ятала й зберегла цей факт у Google Drive." if drive_store else "Записала цей факт у поточний файл пам'яті. Збереження після нового деплою ще потребує зовнішнього сховища."
+        await message.answer(confirmation)
+        history.extend([{"role": "user", "content": text}, {"role": "assistant", "content": confirmation}])
         return
 
     if image_request(text):
@@ -1378,7 +1430,7 @@ async def handle_text(message: types.Message):
     )
     # Cache and Telegram file IDs are implementation data, not conversational memory.
     facts = memory.get("факти", [])[-60:]
-    background = {key: value for key, value in memory.items() if key not in {"image_cache", "фото", "факти"}}
+    background = {key: value for key, value in memory.items() if key not in {"image_cache", "фото", "факти", "conversations"}}
     system = (
         "Ти — Міссі Блек, також Катруся, україномовна асистентка. "
         + personality + " Віталій — творець цього бота. Не вигадуй спогади, можливості чи виконані дії. "
