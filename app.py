@@ -20,7 +20,7 @@ from aiogram.types import BufferedInputFile
 from groq import Groq
 from ddgs import DDGS
 from drive_memory import DriveMemory, MemoryUnavailable, RevisionConflict
-from photo_archive import archive_image, retrieve_image, MAX_ARCHIVE_BYTES
+from photo_archive import archive_image, retrieve_image, retrieve_identity, MAX_ARCHIVE_BYTES
 
 # Render Environment Variables
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -1154,6 +1154,48 @@ async def status_command(message: types.Message):
     await message.answer(f"Бот працює.\nПам'ять: {memory_status}.\nПеревірка фото: {vision}.\nВебпошук: кілька пошукових джерел; доступність перевіряється під час запиту.")
 
 
+@dp.message(Command("setself"))
+async def set_identity_command(message: types.Message):
+    if not await check_access(message):
+        return
+    if (message.from_user.username or "").casefold() != ADMIN_USERNAME.casefold():
+        await message.answer("Основний образ може вибрати лише адміністратор.")
+        return
+    archive_id = message.text.partition(" ")[2].strip()
+    if not re.fullmatch(r"[a-f0-9]{24}", archive_id):
+        await message.answer("Надішли /setself і код свого фото з /photos.")
+        return
+    if not drive_store:
+        await message.answer("Google Drive ще не підключений.")
+        return
+    try:
+        result = await drive_store.request("set_identity", owner=str(message.from_user.id), archive_id=archive_id)
+        if result.get("archive_id") != archive_id:
+            raise MemoryUnavailable("INVALID_IDENTITY_ACKNOWLEDGEMENT")
+        await message.answer("Основний образ збережено в Katrusia_Images. Тепер можеш написати «покажи себе».")
+    except Exception as exc:
+        event("IDENTITY_SELECT_ERROR", str(exc) if isinstance(exc, MemoryUnavailable) else type(exc).__name__)
+        await message.answer("Не вдалося призначити образ. Перевір, що фото є у твоєму /photos і Google-скрипт оновлений.")
+
+
+def identity_request(text):
+    text = text.lower().strip()
+    return bool(re.search(r"(?:покажи|надішли|скинь)\s+(?:мені\s+)?(?:себе|свій\s+(?:образ|портрет)|сво[єії]\s+(?:фото|обличчя))", text))
+
+
+async def show_identity(message):
+    if not drive_store:
+        await message.answer("Основний образ ще не підключено.")
+        return
+    try:
+        data, filename, caption = await retrieve_identity(drive_store)
+        await message.answer_document(BufferedInputFile(data, filename=filename), caption=caption)
+        return True
+    except Exception as exc:
+        event("IDENTITY_READ_ERROR", str(exc) if isinstance(exc, MemoryUnavailable) else type(exc).__name__)
+        await message.answer("Поки не можу надіслати основний образ. Потрібно призначити фото командою /setself або перевірити доступ до архіву.")
+
+
 @dp.message(Command("photos"))
 async def photos_command(message: types.Message):
     if not await check_access(message):
@@ -1288,6 +1330,11 @@ async def handle_text(message: types.Message):
         memory = {"факти": [], "image_cache": {}, "фото": []}
         memory_error = True
     mode = select_mode(uid, text)
+
+    if identity_request(text):
+        shown = await show_identity(message)
+        history.extend([{"role": "user", "content": text}, {"role": "assistant", "content": "[Надіслано основний образ Катрусі]" if shown else "[Основний образ недоступний]"}])
+        return
 
     if re.search(r"(?:мо(?:є|ї|ю|я|їх)\s+фото|мо(?:є|ї|ю|я|їх)\s+фотограф|фото\s+з\s+архіву)", text, re.I):
         await list_archived_photos(message)

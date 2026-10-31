@@ -94,4 +94,41 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
             await app.receive_archived_image(message,SimpleNamespace(file_size=len(data)),False)
         self.assertIn('Не отримала підтвердження',message.answer.await_args.args[0])
 
+
+
+class IdentityTests(unittest.IsolatedAsyncioTestCase):
+    async def test_selected_identity_bytes_are_verified(self):
+        from photo_archive import retrieve_identity
+        data=png_bytes();digest=hashlib.sha256(data).hexdigest();store=AsyncMock()
+        store.request.return_value={'content_b64':base64.b64encode(data).decode(),'sha256':digest,'archive_id':digest[:24],'filename':'Katrusia.png'}
+        self.assertEqual((await retrieve_identity(store))[0],data)
+        store.request.return_value['sha256']='bad'
+        with self.assertRaises(MemoryUnavailable):await retrieve_identity(store)
+
+    def test_identity_request_does_not_route_to_generic_image_search(self):
+        import app
+        self.assertTrue(app.identity_request('Катрусю, покажи себе'))
+        self.assertTrue(app.identity_request('Надішли мені своє фото'))
+        self.assertFalse(app.identity_request('Покажи фото кота'))
+
+    async def test_only_admin_can_change_identity(self):
+        import app
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        store=AsyncMock()
+        message=SimpleNamespace(from_user=SimpleNamespace(id=9,username='MykhailoTa'),text='/setself '+'a'*24,answer=AsyncMock())
+        with patch.object(app,'drive_store',store):await app.set_identity_command(message)
+        store.request.assert_not_awaited()
+        self.assertIn('адміністратор',message.answer.await_args.args[0])
+
+    async def test_admin_selection_uses_callers_archive(self):
+        import app
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        key='a'*24;store=AsyncMock();store.request.return_value={'archive_id':key}
+        message=SimpleNamespace(from_user=SimpleNamespace(id=77,username='E_n_gram'),text='/setself '+key,answer=AsyncMock())
+        with patch.object(app,'drive_store',store):await app.set_identity_command(message)
+        store.request.assert_awaited_once_with('set_identity',owner='77',archive_id=key)
+        self.assertIn('Katrusia_Images',message.answer.await_args.args[0])
+
 if __name__=='__main__':unittest.main()

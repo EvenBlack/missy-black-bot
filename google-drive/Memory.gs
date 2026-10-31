@@ -48,6 +48,17 @@ function setupMemory() {
       }
       props.setProperty('MISSY_PHOTO_FOLDER_ID', archive.getId());
     }
+    if (!props.getProperty('MISSY_IDENTITY_FOLDER_ID')) {
+      const folders = folder.getFoldersByName('Katrusia_Images');
+      let images;
+      if (folders.hasNext()) {
+        images = folders.next();
+        if (folders.hasNext()) throw new Error('Duplicate identity folders.');
+      } else {
+        images = folder.createFolder('Katrusia_Images');
+      }
+      props.setProperty('MISSY_IDENTITY_FOLDER_ID', images.getId());
+    }
     console.log('Setup complete. Secret is in Project Settings > Script properties. Do not paste it into chat.');
   } finally {
     lock.releaseLock();
@@ -91,11 +102,14 @@ function doPost(e) {
     if (!sameSecret_(request.secret, props.getProperty('MISSY_MEMORY_SECRET'))) {
       return json_({ok: false, error: 'UNAUTHORIZED'});
     }
-    if (!['get', 'put', 'archive_photo', 'get_photo', 'list_photos'].includes(request.action)) return json_({ok: false, error: 'INVALID_ACTION'});
+    if (!['get', 'put', 'archive_photo', 'get_photo', 'list_photos', 'set_identity', 'get_identity'].includes(request.action)) return json_({ok: false, error: 'INVALID_ACTION'});
     const fileId = props.getProperty('MISSY_MEMORY_FILE_ID');
     if (!fileId) return json_({ok: false, error: 'SETUP_REQUIRED'});
     lock = LockService.getScriptLock();
     if (!lock.tryLock(10000)) return json_({ok: false, error: 'BUSY'});
+    if (['set_identity', 'get_identity'].includes(request.action)) {
+      return identityRequest_(request, props);
+    }
     if (['archive_photo', 'get_photo', 'list_photos'].includes(request.action)) {
       return photoRequest_(request, props);
     }
@@ -113,7 +127,7 @@ function doPost(e) {
       file.setContent(JSON.stringify(store));
       recovered = true;
     }
-    if (request.action === 'get') return json_({ok: true, revision: store.revision, data: store.data, backup_ready: Boolean(backupId), photo_archive_ready: Boolean(props.getProperty('MISSY_PHOTO_FOLDER_ID')), recovered: recovered});
+    if (request.action === 'get') return json_({ok: true, revision: store.revision, data: store.data, backup_ready: Boolean(backupId), photo_archive_ready: Boolean(props.getProperty('MISSY_PHOTO_FOLDER_ID')), identity_ready: Boolean(props.getProperty('MISSY_IDENTITY_FOLDER_ID')), recovered: recovered});
     if (!Number.isSafeInteger(request.expected_revision) || request.expected_revision !== store.revision) {
       return json_({ok: false, error: 'REVISION_CONFLICT'});
     }
@@ -212,4 +226,42 @@ function photoRequest_(request, props) {
   const bytes = file.getBlob().getBytes();
   if (photoDigest_(bytes) !== meta.sha256) return json_({ok:false,error:'PHOTO_CONFLICT'});
   return json_({ok:true,content_b64:Utilities.base64Encode(bytes),sha256:meta.sha256,filename:meta.filename,caption:meta.caption});
+}
+
+
+function identityRequest_(request, props) {
+  const folderId = props.getProperty('MISSY_IDENTITY_FOLDER_ID');
+  if (!folderId) return json_({ok:false,error:'IDENTITY_SETUP_REQUIRED'});
+  const images = DriveApp.getFolderById(folderId);
+  if (request.action === 'set_identity') {
+    if (typeof request.owner !== 'string' || !/^[0-9]{1,20}$/.test(request.owner) || typeof request.archive_id !== 'string' || !/^[a-f0-9]{24}$/.test(request.archive_id)) return json_({ok:false,error:'INVALID_PHOTO'});
+    const archive = DriveApp.getFolderById(props.getProperty('MISSY_PHOTO_FOLDER_ID'));
+    const stem = request.owner + '_' + request.archive_id;
+    const sidecar = exactPhotoFile_(archive, stem + '.json');
+    if (!sidecar) return json_({ok:false,error:'PHOTO_NOT_FOUND'});
+    const meta = JSON.parse(sidecar.getBlob().getDataAsString('UTF-8'));
+    if (meta.owner !== request.owner || meta.archive_id !== request.archive_id || !['jpg','png','webp','gif','tiff','bmp'].includes(meta.ext)) return json_({ok:false,error:'INVALID_PHOTO'});
+    const source = exactPhotoFile_(archive, stem + '.' + meta.ext);
+    if (!source || source.getSize() > 8*1024*1024) return json_({ok:false,error:'PHOTO_NOT_FOUND'});
+    const bytes = source.getBlob().getBytes();
+    if (photoDigest_(bytes) !== meta.sha256) return json_({ok:false,error:'PHOTO_CONFLICT'});
+    const name = 'Katrusia_' + request.archive_id + '.' + meta.ext;
+    let copy = exactPhotoFile_(images, name);
+    if (!copy) copy = images.createFile(Utilities.newBlob(bytes, source.getBlob().getContentType(), name));
+    if (photoDigest_(copy.getBlob().getBytes()) !== meta.sha256) return json_({ok:false,error:'PHOTO_CONFLICT'});
+    const selected = {archive_id:meta.archive_id,sha256:meta.sha256,ext:meta.ext,filename:'Katrusia.'+meta.ext,caption:'Катруся — основний візуальний образ',size:bytes.length};
+    const primary = exactPhotoFile_(images, 'primary.json');
+    if (primary) primary.setContent(JSON.stringify(selected));
+    else images.createFile('primary.json', JSON.stringify(selected), MimeType.PLAIN_TEXT);
+    return json_({ok:true,archive_id:meta.archive_id,sha256:meta.sha256});
+  }
+  const primary = exactPhotoFile_(images, 'primary.json');
+  if (!primary) return json_({ok:false,error:'IDENTITY_NOT_SET'});
+  const selected = JSON.parse(primary.getBlob().getDataAsString('UTF-8'));
+  if (!/^[a-f0-9]{24}$/.test(selected.archive_id) || !['jpg','png','webp','gif','tiff','bmp'].includes(selected.ext)) return json_({ok:false,error:'INVALID_PHOTO'});
+  const copy = exactPhotoFile_(images, 'Katrusia_' + selected.archive_id + '.' + selected.ext);
+  if (!copy || copy.getSize() > 8*1024*1024) return json_({ok:false,error:'PHOTO_NOT_FOUND'});
+  const bytes = copy.getBlob().getBytes();
+  if (photoDigest_(bytes) !== selected.sha256) return json_({ok:false,error:'PHOTO_CONFLICT'});
+  return json_({ok:true,archive_id:selected.archive_id,sha256:selected.sha256,content_b64:Utilities.base64Encode(bytes),filename:selected.filename,caption:selected.caption});
 }

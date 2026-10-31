@@ -52,3 +52,15 @@ async def retrieve_image(store, owner, archive_id):
         return data, safe_filename(result.get('filename'), ext), result.get('caption', '')[:700]
     except (KeyError, TypeError, ValueError):
         raise MemoryUnavailable('INVALID_ARCHIVED_IMAGE') from None
+
+
+async def retrieve_identity(store):
+    result = await store.request('get_identity')
+    try:
+        data = base64.b64decode(result['content_b64'], validate=True)
+        _, ext, digest = inspect_image(data)
+        if digest != result['sha256'] or digest[:24] != result['archive_id']:
+            raise ValueError('IDENTITY_CHECKSUM_MISMATCH')
+        return data, safe_filename(result.get('filename'), ext), 'Катруся — основний візуальний образ'
+    except (KeyError, TypeError, ValueError):
+        raise MemoryUnavailable('INVALID_IDENTITY_IMAGE') from None
