@@ -29,6 +29,8 @@ class DriveMemory:
         if len(secret) < 32:
             raise MemoryUnavailable('INVALID_MEMORY_SECRET')
         self.url, self.secret = url, secret
+        self.backup_ready = False
+        self.recovered = False
 
     async def request(self, action, **fields):
         payload = dict(fields, action=action, secret=self.secret)
@@ -66,7 +68,7 @@ class DriveMemory:
         if not isinstance(result, dict) or result.get('ok') is not True:
             if isinstance(result, dict) and result.get('error') == 'REVISION_CONFLICT':
                 raise RevisionConflict('REVISION_CONFLICT')
-            safe_errors = {'UNAUTHORIZED', 'SETUP_REQUIRED', 'STORAGE_ERROR', 'POST_REQUIRED', 'BUSY', 'INVALID_ACTION', 'INVALID_DATA', 'MEMORY_TOO_LARGE', 'INVALID_REQUEST'}
+            safe_errors = {'UNAUTHORIZED', 'SETUP_REQUIRED', 'STORAGE_ERROR', 'POST_REQUIRED', 'BUSY', 'INVALID_ACTION', 'INVALID_DATA', 'MEMORY_TOO_LARGE', 'INVALID_REQUEST', 'BACKUP_UNAVAILABLE', 'BACKUP_SETUP_REQUIRED'}
             code = result.get('error') if isinstance(result, dict) else None
             raise MemoryUnavailable('MEMORY_' + code if isinstance(code, str) and code in safe_errors else 'MEMORY_REQUEST_REJECTED')
         revision = result.get('revision')
@@ -78,6 +80,8 @@ class DriveMemory:
         result = await self.request('get')
         if 'data' not in result:
             raise MemoryUnavailable('MISSING_MEMORY_DATA')
+        self.backup_ready = result.get('backup_ready') is True
+        self.recovered = result.get('recovered') is True
         data = result['data']
         if data is not None:
             validate_memory(data)

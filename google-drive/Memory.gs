@@ -23,6 +23,20 @@ function setupMemory() {
       }
       props.setProperty('MISSY_MEMORY_FILE_ID', file.getId());
     }
+    if (!props.getProperty('MISSY_BACKUP_FILE_ID')) {
+      const main = DriveApp.getFileById(props.getProperty('MISSY_MEMORY_FILE_ID'));
+      const snapshot = JSON.stringify(readStore_(main));
+      const found = folder.getFilesByName('missy_memory_backup.json');
+      let backup;
+      if (found.hasNext()) {
+        backup = found.next();
+        if (found.hasNext()) throw new Error('Duplicate backup files.');
+        readStore_(backup);
+      } else {
+        backup = folder.createFile('missy_memory_backup.json', snapshot, MimeType.PLAIN_TEXT);
+      }
+      props.setProperty('MISSY_BACKUP_FILE_ID', backup.getId());
+    }
     console.log('Setup complete. Secret is in Project Settings > Script properties. Do not paste it into chat.');
   } finally {
     lock.releaseLock();
@@ -38,7 +52,7 @@ function readStore_(file) {
   if (!Number.isSafeInteger(store.revision) || store.revision < 0 || !Object.prototype.hasOwnProperty.call(store, 'data')) {
     throw new Error('Invalid stored memory.');
   }
-  if (store.data !== null && (typeof store.data !== 'object' || Array.isArray(store.data))) {
+  if (store.data !== null && (typeof store.data !== 'object' || Array.isArray(store.data) || !Array.isArray(store.data['факти']) || !Array.isArray(store.data['фото']) || !store.data.image_cache || typeof store.data.image_cache !== 'object' || Array.isArray(store.data.image_cache))) {
     throw new Error('Invalid stored data.');
   }
   return store;
@@ -71,9 +85,21 @@ function doPost(e) {
     if (!fileId) return json_({ok: false, error: 'SETUP_REQUIRED'});
     lock = LockService.getScriptLock();
     if (!lock.tryLock(10000)) return json_({ok: false, error: 'BUSY'});
+    const backupId = props.getProperty('MISSY_BACKUP_FILE_ID');
     const file = DriveApp.getFileById(fileId);
-    const store = readStore_(file);
-    if (request.action === 'get') return json_({ok: true, revision: store.revision, data: store.data});
+    let store;
+    let recovered = false;
+    try {
+      store = readStore_(file);
+    } catch (mainError) {
+      if (!backupId) return json_({ok: false, error: 'BACKUP_UNAVAILABLE'});
+      store = readStore_(DriveApp.getFileById(backupId));
+      // Never restore an uninitialized backup over an established memory file.
+      if (store.data === null) return json_({ok: false, error: 'BACKUP_UNAVAILABLE'});
+      file.setContent(JSON.stringify(store));
+      recovered = true;
+    }
+    if (request.action === 'get') return json_({ok: true, revision: store.revision, data: store.data, backup_ready: Boolean(backupId), recovered: recovered});
     if (!Number.isSafeInteger(request.expected_revision) || request.expected_revision !== store.revision) {
       return json_({ok: false, error: 'REVISION_CONFLICT'});
     }
@@ -84,6 +110,10 @@ function doPost(e) {
     const next = {revision: store.revision + 1, data: data};
     const serialized = JSON.stringify(next);
     if (serialized.length > 262144) return json_({ok: false, error: 'MEMORY_TOO_LARGE'});
+    if (!backupId) return json_({ok: false, error: 'BACKUP_SETUP_REQUIRED'});
+    // Preserve the last good complete snapshot before replacing the main file.
+    // A failed backup write aborts the update; it must never be acknowledged.
+    DriveApp.getFileById(backupId).setContent(JSON.stringify(store));
     file.setContent(serialized);
     return json_({ok: true, revision: next.revision});
   } catch (error) {
