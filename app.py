@@ -20,6 +20,7 @@ from aiogram.types import BufferedInputFile
 from groq import Groq
 from ddgs import DDGS
 from drive_memory import DriveMemory, MemoryUnavailable, RevisionConflict
+from photo_archive import archive_image, retrieve_image, MAX_ARCHIVE_BYTES
 
 # Render Environment Variables
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -182,6 +183,7 @@ async def initialize_memory():
                     raise MemoryUnavailable("MEMORY_INITIALIZATION_CONFLICT")
         event("MEMORY_BACKEND", "Google Drive connected and initialized")
         event("MEMORY_BACKUP", "ready" if getattr(drive_store, "backup_ready", False) is True else "script update required")
+        event("PHOTO_ARCHIVE", "ready" if getattr(drive_store, "photo_archive_ready", False) is True else "script update required")
 
 
 async def change_memory(callback):
@@ -1146,32 +1148,101 @@ async def status_command(message: types.Message):
     except Exception:
         memory_status = "сховище недоступне; збереження спогадів зараз не підтверджене"
     if drive_store:
+        memory_status += "; фотоархів " + ("готовий" if getattr(drive_store, "photo_archive_ready", False) is True else "ще не підключений")
         memory_status += "; резервний файл " + ("налаштовано" if getattr(drive_store, "backup_ready", False) is True else "ще не налаштовано")
     vision = "налаштована; потрібна перевірка запитом" if CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN else "не налаштована"
     await message.answer(f"Бот працює.\nПам'ять: {memory_status}.\nПеревірка фото: {vision}.\nВебпошук: кілька пошукових джерел; доступність перевіряється під час запиту.")
 
 
-@dp.message(F.photo)
-async def receive_photo(message: types.Message):
+@dp.message(Command("photos"))
+async def photos_command(message: types.Message):
     if not await check_access(message):
         return
+    await list_archived_photos(message, message.text.partition(" ")[2])
 
-    photo = message.photo[-1]
 
-    def add(data):
-        data["фото"].append({
-            "file_id": photo.file_id,
-            "description": message.caption or "Без підпису",
-            "sender": message.from_user.first_name,
-        })
-        data["фото"] = data["фото"][-50:]
-
-    try:
-        await change_memory(add)
-    except Exception:
-        await message.answer("Не вдалося зберегти фото в пам'ять. Файл пам'яті потребує перевірки.")
+async def list_archived_photos(message, query=""):
+    if not drive_store:
+        await message.answer("Архів Google Drive ще не підключений.")
         return
-    await message.answer("Зберегла посилання Telegram на фото і підпис" + (" у Google Drive. " if drive_store else ". ") + "Це ще не резервна копія оригіналу.")
+    try:
+        result = await drive_store.request("list_photos", owner=str(message.from_user.id), query=query[:150])
+        items = result.get("photos", [])
+        if not items:
+            await message.answer("У твоєму архіві немає фото за цим запитом. Надішли зображення як файл із підписом.")
+            return
+        lines = ["Фото з твого архіву:"]
+        for item in items[:10]:
+            if not isinstance(item, dict) or not re.fullmatch(r"[a-f0-9]{24}", str(item.get("archive_id", ""))):
+                continue
+            lines.append(f"{str(item.get('created', ''))[:10]} — {str(item.get('caption') or item.get('filename', 'Фото'))[:250]}\n/photo {item['archive_id']}")
+        if result.get("unreadable_count"):
+            lines.append("Частину записів не вдалося прочитати; перелік може бути неповним.")
+        if result.get("has_more"):
+            lines.append("Є ще фото. Уточни підпис: /photos слово")
+        await send_long(message, "\n\n".join(lines))
+    except Exception as exc:
+        event("PHOTO_ARCHIVE_LIST_ERROR", str(exc) if isinstance(exc, MemoryUnavailable) else type(exc).__name__)
+        await message.answer("Не вдалося прочитати фотоархів. Спробуй пізніше.")
+
+
+@dp.message(Command("photo"))
+async def photo_command(message: types.Message):
+    if not await check_access(message):
+        return
+    archive_id = message.text.partition(" ")[2].strip()
+    if not re.fullmatch(r"[a-f0-9]{24}", archive_id):
+        await message.answer("Вибери фото через /photos і надішли наведену команду /photo з його кодом.")
+        return
+    if not drive_store:
+        await message.answer("Архів Google Drive ще не підключений.")
+        return
+    try:
+        data, filename, caption = await retrieve_image(drive_store, message.from_user.id, archive_id)
+        await message.answer_document(BufferedInputFile(data, filename=filename), caption=caption or "Фото з архіву Google Drive")
+    except Exception as exc:
+        event("PHOTO_ARCHIVE_READ_ERROR", str(exc) if isinstance(exc, MemoryUnavailable) else type(exc).__name__)
+        await message.answer("Не вдалося отримати цей файл із твого архіву. Перевір код через /photos або спробуй пізніше.")
+
+
+async def receive_archived_image(message, media, original):
+    if not await check_access(message):
+        return
+    if not drive_store:
+        await message.answer("Для архіву потрібне підключення Google Drive.")
+        return
+    if media.file_size and media.file_size > MAX_ARCHIVE_BYTES:
+        await message.answer("Поки можу архівувати зображення розміром до 8 МіБ. Цей файл не збережено в архів.")
+        return
+    try:
+        buffer = BytesIO()
+        await message.bot.download(media, destination=buffer, timeout=40)
+        data = buffer.getvalue()
+        archive_id = await archive_image(
+            drive_store, data, message.from_user.id,
+            getattr(media, "file_name", None), message.caption or "",
+            original, message.date.isoformat(),
+        )
+    except ValueError:
+        await message.answer("Не вдалося перевірити зображення. Підтримую JPEG, PNG, WEBP, GIF, TIFF і BMP до 8 МіБ. Файл не підтверджений як збережений.")
+        return
+    except Exception as exc:
+        event("PHOTO_ARCHIVE_SAVE_ERROR", str(exc) if isinstance(exc, MemoryUnavailable) else type(exc).__name__)
+        await message.answer("Не отримала підтвердження збереження в Google Drive. Можеш повторно надіслати той самий файл — успішний запис не створює дубліката.")
+        return
+    event("PHOTO_ARCHIVE_SAVED", "Drive bytes and metadata acknowledged")
+    kind = "Файл збережено в Google Drive без зміни отриманих байтів." if original else "Зберегла в Google Drive версію фото, отриману від Telegram. Для незміненого оригіналу надсилай як файл / документ."
+    await message.answer(f"{kind}\nОтримати: /photo {archive_id}\nПошук за підписом: /photos слово")
+
+
+@dp.message(F.photo)
+async def receive_photo(message: types.Message):
+    await receive_archived_image(message, message.photo[-1], False)
+
+
+@dp.message(F.document)
+async def receive_image_document(message: types.Message):
+    await receive_archived_image(message, message.document, True)
 
 
 @dp.message(F.text)
@@ -1203,7 +1274,7 @@ async def handle_text(message: types.Message):
     text = message.text.strip()
 
     if text.startswith("/"):
-        await message.answer("Невідома команда. Доступні /start і /status.")
+        await message.answer("Невідома команда. Доступні /start, /status, /photos і /photo.")
         return
 
     uid = message.from_user.id
@@ -1217,6 +1288,10 @@ async def handle_text(message: types.Message):
         memory = {"факти": [], "image_cache": {}, "фото": []}
         memory_error = True
     mode = select_mode(uid, text)
+
+    if re.search(r"(?:мо(?:є|ї|ю|я|їх)\s+фото|мо(?:є|ї|ю|я|їх)\s+фотограф|фото\s+з\s+архіву)", text, re.I):
+        await list_archived_photos(message)
+        return
 
     if re.search(r"запам[’\x27ʼ`]?ятай", text.lower()):
         def add_fact(data):
