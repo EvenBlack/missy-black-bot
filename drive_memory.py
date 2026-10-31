@@ -30,12 +30,13 @@ class DriveMemory:
             raise MemoryUnavailable('INVALID_MEMORY_SECRET')
         self.url, self.secret = url, secret
         self.backup_ready = False
+        self.photo_archive_ready = False
         self.recovered = False
 
     async def request(self, action, **fields):
         payload = dict(fields, action=action, secret=self.secret)
         try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25, connect=8)) as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60 if action in {'archive_photo', 'get_photo'} else 25, connect=8)) as session:
                 method, url = 'POST', self.url
                 # ContentService redirects POST to a read-only Google-hosted output URL.
                 for _ in range(4):
@@ -53,7 +54,7 @@ class DriveMemory:
                         chunks, size = [], 0
                         async for chunk in response.content.iter_chunked(65536):
                             size += len(chunk)
-                            if size > 2 * 1024 * 1024:
+                            if size > (12 if action == 'get_photo' else 2) * 1024 * 1024:
                                 raise MemoryUnavailable('MEMORY_RESPONSE_TOO_LARGE')
                             chunks.append(chunk)
                         result = json.loads(b''.join(chunks))
@@ -68,11 +69,11 @@ class DriveMemory:
         if not isinstance(result, dict) or result.get('ok') is not True:
             if isinstance(result, dict) and result.get('error') == 'REVISION_CONFLICT':
                 raise RevisionConflict('REVISION_CONFLICT')
-            safe_errors = {'UNAUTHORIZED', 'SETUP_REQUIRED', 'STORAGE_ERROR', 'POST_REQUIRED', 'BUSY', 'INVALID_ACTION', 'INVALID_DATA', 'MEMORY_TOO_LARGE', 'INVALID_REQUEST', 'BACKUP_UNAVAILABLE', 'BACKUP_SETUP_REQUIRED'}
+            safe_errors = {'UNAUTHORIZED', 'SETUP_REQUIRED', 'STORAGE_ERROR', 'POST_REQUIRED', 'BUSY', 'INVALID_ACTION', 'INVALID_DATA', 'MEMORY_TOO_LARGE', 'INVALID_REQUEST', 'BACKUP_UNAVAILABLE', 'BACKUP_SETUP_REQUIRED', 'ARCHIVE_SETUP_REQUIRED', 'INVALID_PHOTO', 'PHOTO_NOT_FOUND', 'PHOTO_CONFLICT'}
             code = result.get('error') if isinstance(result, dict) else None
             raise MemoryUnavailable('MEMORY_' + code if isinstance(code, str) and code in safe_errors else 'MEMORY_REQUEST_REJECTED')
         revision = result.get('revision')
-        if type(revision) is not int or revision < 0:
+        if action in {'get', 'put'} and (type(revision) is not int or revision < 0):
             raise MemoryUnavailable('INVALID_MEMORY_REVISION')
         return result
 
@@ -81,6 +82,7 @@ class DriveMemory:
         if 'data' not in result:
             raise MemoryUnavailable('MISSING_MEMORY_DATA')
         self.backup_ready = result.get('backup_ready') is True
+        self.photo_archive_ready = result.get('photo_archive_ready') is True
         self.recovered = result.get('recovered') is True
         data = result['data']
         if data is not None:
