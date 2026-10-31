@@ -188,7 +188,7 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0)
             active -= 1
         message = SimpleNamespace(from_user=SimpleNamespace(id=77,username='E_n_gram'))
-        with patch.object(app,'handle_text',fake):
+        with patch.object(app,'handle_text',fake), patch.object(app,'persist_conversation',AsyncMock()):
             await asyncio.gather(app.text_handler(message), app.text_handler(message))
         self.assertEqual(peak,1)
         self.assertEqual(len(app.histories[77]), app.MAX_HISTORY*2)
