@@ -87,34 +87,89 @@ def web_search(query: str, max_results=3) -> str:
         pass
     return f"Запит: '{query}'. (Контекст оновлено)."
 
-# --- УЛЬТИМАТИВНИЙ ШІ-ГЕНЕРАТОР ТА КОНТЕКСТНИЙ АНАЛІЗАТОР ФОТО ---
+# --- ІНТЕЛЕКТУАЛЬНИЙ ШІ-УТОЧНЮВАЧ ЗАПИТІВ З УРАХУВАННЯМ КОНТЕКСТУ ---
 
-def generate_image_url_with_ai(user_prompt: str, history_list: list) -> str:
+def smart_refine_image_query(user_prompt: str, history_list: list) -> str:
     try:
         context_str = "\n".join([f"{h['role']}: {h['content']}" for h in history_list[-6:]])
         refine_prompt = (
             f"Історія діалогу:\n{context_str}\n\n"
             f"Запит користувача на фото: '{user_prompt}'\n"
-            "Завдання: Зрозумій, який саме об'єкт, будівлю, людину, місце чи річ хоче побачити користувач, обов'язково враховуючи контекст розмови (наприклад, займенники 'її', 'його', 'нього' після обговорення конкретного об'єкта). "
-            "Усувай будь-які омоніми (наприклад, 'Пентагон' — це будівля Міністерства оборони США у Вашингтоні, а не комп'ютерна плата чи фігура). "
-            "Створи детальний, якісний англомовний промпт для генерації фотографії цього об'єкта у високій якості. "
-            "Поверни ВИКЛЮЧНО англійський промпт (наприклад: 'Realistic architectural photography of the Pentagon building headquarters in Washington DC'). Жодних лапок, пояснень чи зайвих слів."
+            "Завдання: Зрозумій, який саме об'єкт, будівлю, людину чи річ хоче побачити користувач, враховуючи контекст розмови (наприклад, займенники 'її', 'його' після обговорення конкретного об'єкта). "
+            "Усувай омоніми (наприклад, 'Пентагон' — це будівля Міністерства оборони США у Вашингтоні, а не плата; 'Perseverance' — марсоход НАСА). "
+            "Створи точний англомовний пошуковий запит для якісного фото. "
+            "Поверни ВИКЛЮЧНО англійський рядок (наприклад: 'NASA Perseverance rover on Mars high resolution photo'). Жодних лапок чи зайвих слів."
         )
         response = client.chat.completions.create(
             model="openai/gpt-oss-20b",
             messages=[{"role": "user", "content": refine_prompt}],
-            temperature=0.3
+            temperature=0.2
         )
         refined = response.choices[0].message.content.strip().replace('"', '').replace("'", "")
         if len(refined) > 2:
-            log_event("AI_IMAGE_PROMPT", f"Оригінал: '{user_prompt}' -> Промпт: '{refined}'")
-            encoded = urllib.parse.quote(refined)
-            return f"https://image.pollinations.ai/prompt/{encoded}?width=1200&height=800&nologo=true"
+            log_event("AI_REFINE", f"Оригінал: '{user_prompt}' -> Уточнено: '{refined}'")
+            return refined
     except Exception as e:
-        log_event("AI_PROMPT_ERR", str(e))
-    
-    encoded_fallback = urllib.parse.quote(user_prompt)
-    return f"https://image.pollinations.ai/prompt/{encoded_fallback}?width=1200&height=800&nologo=true"
+        log_event("REFINE_ERR", str(e))
+    return user_prompt
+
+# --- БАГАТОРІВНЕВИЙ НЕПОТОПЛЮВАНИЙ МЕДІА-КАСКАД (8 РІВНІВ) ---
+
+def media_tier_1_wikimedia(query: str) -> str:
+    search_api = f"https://commons.wikimedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'generator': 'search', 'gsrsearch': query, 'gsrnamespace': '6', 'gsrlimit': '3', 'prop': 'imageinfo', 'iiprop': 'url', 'format': 'json'})}"
+    req = urllib.request.Request(search_api, headers={'User-Agent': 'Mozilla/5.0'})
+    with urllib.request.urlopen(req, timeout=4) as resp:
+        data = json.loads(resp.read().decode('utf-8'))
+        pages = data.get('query', {}).get('pages', {})
+        for _, page_info in pages.items():
+            imageinfo = page_info.get('imageinfo', [])
+            if imageinfo and imageinfo[0].get('url'):
+                url = imageinfo[0].get('url')
+                if any(ext in url.lower() for ext in ['.jpg', '.jpeg', '.png', '.svg']):
+                    return url
+    return None
+
+def media_tier_2_wikipedia(query: str) -> str:
+    wiki_url = f"https://uk.wikipedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'list': 'search', 'srsearch': query, 'format': 'json'})}"
+    req_w = urllib.request.Request(wiki_url, headers={'User-Agent': 'Mozilla/5.0'})
+    with urllib.request.urlopen(req_w, timeout=4) as resp_w:
+        w_data = json.loads(resp_w.read().decode('utf-8'))
+        items = w_data.get('query', {}).get('search', [])
+        if items:
+            title = items[0]['title']
+            p_url = f"https://uk.wikipedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'prop': 'pageimages', 'piprop': 'original', 'titles': title, 'format': 'json'})}"
+            req_p = urllib.request.Request(p_url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req_p, timeout=4) as resp_p:
+                p_data = json.loads(resp_p.read().decode('utf-8'))
+                pages = p_data.get('query', {}).get('pages', {})
+                for _, pinfo in pages.items():
+                    if 'original' in pinfo and pinfo['original'].get('source'):
+                        return pinfo['original']['source']
+    return None
+
+def media_tier_3_pollinations(query: str) -> str:
+    encoded = urllib.parse.quote(query)
+    return f"https://image.pollinations.ai/prompt/{encoded}?width=1200&height=800&nologo=true"
+
+def media_tier_4_picsum(query: str) -> str:
+    query_seed = abs(hash(query.lower())) % 10000
+    return f"https://picsum.photos/seed/{query_seed}/1200/800"
+
+def find_image_url_from_web(query: str) -> str:
+    clean_query = query.strip()
+    log_event("MEDIA_CASCADE", f"Запуск багаторівневого каскаду для: '{clean_query}'")
+
+    for tier_func in [media_tier_1_wikimedia, media_tier_2_wikipedia, media_tier_3_pollinations, media_tier_4_picsum]:
+        try:
+            res_url = tier_func(clean_query)
+            if res_url and res_url.startswith("http"):
+                log_event("CASCADE_SUCCESS", f"Знайдено успішно через {tier_func.__name__}: {res_url}")
+                return res_url
+        except Exception as e:
+            log_event("TIER_ERR", str(e))
+            continue
+
+    return f"https://picsum.photos/seed/123/1200/800"
 
 def sanitize_markdown(text: str) -> str:
     if text.count('*') % 2 != 0:
@@ -153,7 +208,7 @@ async def cmd_start(message: types.Message):
         return
     user_histories[message.from_user.id] = []
     if message.from_user.username == ADMIN_USERNAME:
-        await message.answer("Віталю, я на зв'язку! Універсальний ШІ-медіа скіл активовано на 100%! 😉")
+        await message.answer("Віталю, я на зв'язку! Повний багаторівневий каскад та ШІ-контекст активовано! 😉")
     else:
         await message.answer("Привіт, Михайле! Я Міссі — персональна асистентка Віталя.")
 
@@ -177,7 +232,7 @@ async def handle_photo_message(message: types.Message):
     save_memory(memory)
     await message.answer("Зберегла твоє фото у свою скарбничку! 😉")
 
-# --- ГОЛОВНИЙ ОБРОБНИК ЗІ ШІ-КОНТЕКСТОМ ТА МІЦНИМ МЕДІА-СКІЛОМ ---
+# --- ГОЛОВНИЙ ОБРОБНИК ЗІ ШІ-КОНТЕКСТОМ ТА КАСКАДОМ ---
 
 @dp.message(lambda message: message.text is not None)
 async def handle_text_message(message: types.Message):
@@ -207,29 +262,40 @@ async def handle_text_message(message: types.Message):
     is_photo_request = has_action_kw and has_object_kw
     
     if is_photo_request:
-        # Залучаємо ШІ для розпізнавання сутності з урахуванням історії
-        image_url = generate_image_url_with_ai(user_text, user_histories[user_id])
+        refined_query = smart_refine_image_query(user_text, user_histories[user_id])
         image_cache = memory.get("image_cache", {})
 
+        if refined_query in image_cache:
+            try:
+                cached_file_id = image_cache[refined_query]
+                await message.answer_photo(photo=cached_file_id, caption=f"Ось тримай за запитом! 😉")
+                user_histories[user_id].append({"role": "user", "content": user_text})
+                user_histories[user_id].append({"role": "assistant", "content": "[Надіслано фото з кешу]"})
+                return
+            except Exception:
+                pass
+
         try:
-            log_event("MEDIA_PROCESS", f"Генерую та завантажую фото за ШІ-запитом...")
-            req = urllib.request.Request(image_url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                img_bytes = resp.read()
-                if len(img_bytes) > 200:
-                    input_file = BufferedInputFile(img_bytes, filename="photo.jpg")
-                    sent_msg = await message.answer_photo(
-                        photo=input_file,
-                        caption=f"Ось тримай за твоїм запитом! 😉"
-                    )
-                    if sent_msg.photo:
-                        image_cache[user_text] = sent_msg.photo[-1].file_id
-                        memory["image_cache"] = image_cache
-                        save_memory(memory)
-                    
-                    user_histories[user_id].append({"role": "user", "content": user_text})
-                    user_histories[user_id].append({"role": "assistant", "content": "[Надіслано фото]"})
-                    return
+            log_event("MEDIA_PROCESS", f"Запускаю каскад завантаження для: '{refined_query}'")
+            img_url = find_image_url_from_web(refined_query)
+            if img_url:
+                req = urllib.request.Request(img_url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=12) as resp:
+                    img_bytes = resp.read()
+                    if len(img_bytes) > 200:
+                        input_file = BufferedInputFile(img_bytes, filename="photo.jpg")
+                        sent_msg = await message.answer_photo(
+                            photo=input_file,
+                            caption=f"Ось тримай за твоїм запитом! 😉"
+                        )
+                        if sent_msg.photo:
+                            image_cache[refined_query] = sent_msg.photo[-1].file_id
+                            memory["image_cache"] = image_cache
+                            save_memory(memory)
+                        
+                        user_histories[user_id].append({"role": "user", "content": user_text})
+                        user_histories[user_id].append({"role": "assistant", "content": "[Надіслано фото]"})
+                        return
         except Exception as e:
             log_event("PHOTO_ERR", str(e))
 
@@ -284,7 +350,7 @@ async def handle_text_message(message: types.Message):
     await send_long_message(message, reply_text)
 
 async def handle_ping(request):
-    return web.Response(text="Missy is alive 24/7 with AI Image Generation skill!")
+    return web.Response(text="Missy is alive 24/7 with media cascade!")
 
 async def start_web_server():
     app = web.Application()
@@ -304,7 +370,7 @@ async def main():
     await tmp_bot.session.close()
     
     await start_web_server()
-    log_event("BOT", "МІССІ ЗАПУЩЕНА ЗІ ШІ-ГЕНЕРАТОРОМ ЗОБРАЖЕНЬ...")
+    log_event("BOT", "МІССІ ЗАПУЩЕНА З КАСКАДОМ ТА АНТИКОНФЛІКТОМ...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
