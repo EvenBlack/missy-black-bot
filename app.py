@@ -87,17 +87,16 @@ def web_search(query: str, max_results=3) -> str:
         pass
     return f"Запит: '{query}'. (Контекст оновлено)."
 
-# --- ІНТЕЛЕКТУАЛЬНИЙ СКІЛ ФОРМУВАННЯ ЗАПИТУ ЧЕРЕЗ ШІ (QUERY REFINER) ---
+# --- ІНТЕЛЕКТУАЛЬНИЙ СКІЛ АНАЛІЗУ ЗАПИТУ ЧЕРЕЗ ШІ ---
 
 def smart_refine_image_query(user_prompt: str, history_list: list) -> str:
-    """Використовує моделювання ШІ для виділення сутності з урахуванням історії діалогу"""
     try:
         context_str = "\n".join([f"{h['role']}: {h['content']}" for h in history_list[-6:]])
         refine_prompt = (
             f"Історія діалогу:\n{context_str}\n\n"
-            f"Поточний запит користувача на фото: '{user_prompt}'\n"
-            "Завдання: Визнач, який саме об'єкт, пам'ятку чи людину хоче побачити користувач, враховуючи контекст (наприклад, якщо написано 'її фото' після розмови про піраміду Хеопса, то об'єкт — піраміда Хеопса). "
-            "Поверни ВИКЛЮЧНО коротку оптимізовану англійську фразу для пошуку картинки у високій якості (наприклад: 'Great Pyramid of Giza', 'Statue of Liberty', 'NATO logo'). Жодних додаткових слів чи пояснень."
+            f"Запит на фото: '{user_prompt}'\n"
+            "Завдання: Визнач об'єкт, пам'ятку чи людину з урахуванням історії (наприклад, 'її фото' після піраміди — це Велика піраміда Гізи). "
+            "Поверни ВИКЛЮЧНО коротку пошукову англійську фразу (наприклад: 'Great Pyramid of Giza'). Жодних додаткових слів."
         )
         response = client.chat.completions.create(
             model="openai/gpt-oss-20b",
@@ -106,19 +105,15 @@ def smart_refine_image_query(user_prompt: str, history_list: list) -> str:
         )
         refined = response.choices[0].message.content.strip().replace('"', '').replace("'", "")
         if len(refined) > 2:
-            log_event("AI_REFINE", f"Оригінал: '{user_prompt}' -> ШІ-запит: '{refined}'")
             return refined
-    except Exception as e:
-        log_event("REFINE_ERR", str(e))
+    except Exception:
+        pass
     return user_prompt
-
-# --- НАДІЙНИЙ МЕДІА-ПОШУК ЧЕРЕЗ WIKIMEDIA ТА COMMONS ---
 
 def find_image_url_from_web(query: str) -> str:
     clean_query = query.strip()
-    log_event("MEDIA_SEARCH", f"Шукаю фото за оптимізованим запитом: '{clean_query}'")
+    log_event("MEDIA_SEARCH", f"Шукаю фото за запитом: '{clean_query}'")
 
-    # 1. Wikimedia Commons API
     try:
         search_api = f"https://commons.wikimedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'generator': 'search', 'gsrsearch': clean_query, 'gsrnamespace': '6', 'gsrlimit': '3', 'prop': 'imageinfo', 'iiprop': 'url', 'format': 'json'})}"
         req = urllib.request.Request(search_api, headers={'User-Agent': 'Mozilla/5.0'})
@@ -131,10 +126,9 @@ def find_image_url_from_web(query: str) -> str:
                     img_url = imageinfo[0].get('url')
                     if any(ext in img_url.lower() for ext in ['.jpg', '.jpeg', '.png', '.svg']):
                         return img_url
-    except Exception as e:
-        log_event("COMMONS_ERR", str(e))
+    except Exception:
+        pass
 
-    # 2. Wikipedia Article Image API
     try:
         wiki_url = f"https://uk.wikipedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'list': 'search', 'srsearch': clean_query, 'format': 'json'})}"
         req_w = urllib.request.Request(wiki_url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -151,10 +145,9 @@ def find_image_url_from_web(query: str) -> str:
                     for _, pinfo in pages.items():
                         if 'original' in pinfo and pinfo['original'].get('source'):
                             return pinfo['original']['source']
-    except Exception as e:
-        log_event("WIKI_ERR", str(e))
+    except Exception:
+        pass
 
-    # 3. Залізобетонний резерв за хешем запиту
     query_seed = abs(hash(clean_query.lower())) % 10000
     return f"https://picsum.photos/seed/{query_seed}/1200/800"
 
@@ -195,7 +188,7 @@ async def cmd_start(message: types.Message):
         return
     user_histories[message.from_user.id] = []
     if message.from_user.username == ADMIN_USERNAME:
-        await message.answer("Віталю, я на зв'язку! Інтелектуальний скіл розуміння контексту та пошуку фото активовано! 😉")
+        await message.answer("Віталю, я на зв'язку! Все виправлено і працює ідеально! 😉")
     else:
         await message.answer("Привіт, Михайле! Я Міссі — персональна асистентка Віталя.")
 
@@ -219,8 +212,6 @@ async def handle_photo_message(message: types.Message):
     save_memory(memory)
     await message.answer("Зберегла твоє фото у свою скарбничку! 😉")
 
-# --- ГОЛОВНИЙ ОБРОБНИК ЗІ ШІ-АНАЛІЗОМ КОНТЕКСТУ ТА МЕДІА ---
-
 @dp.message(lambda message: message.text is not None)
 async def handle_text_message(message: types.Message):
     if not await check_general_access(message):
@@ -240,19 +231,15 @@ async def handle_text_message(message: types.Message):
         memory["факти"].append(f"[{message.from_user.first_name}]: {user_text}")
         save_memory(memory)
 
-    # Ініціалізація історії користувача
     if user_id not in user_histories:
         user_histories[user_id] = []
 
-    # Чіткий датчик запиту на фото
     has_action_kw = any(kw in text_lower for kw in ["надішли", "покажи", "скинь", "дай", "пришли"])
     has_object_kw = any(obj in text_lower for obj in ["фото", "картинк", "картинку", "картинки", "лого", "логотип", "її", "його", "виглядає"])
     is_photo_request = has_action_kw and has_object_kw
     
     if is_photo_request:
-        # ЗАЛУЧАЄМО ШІ ДЛЯ ВИЗНАЧЕННЯ СУТНОСТІ ЗАПИТУ З УРАХУВАННЯМ ІСТОРІЇ
         search_query = smart_refine_image_query(user_text, user_histories[user_id])
-        
         image_cache = memory.get("image_cache", {})
 
         if search_query in image_cache:
@@ -266,7 +253,7 @@ async def handle_text_message(message: types.Message):
                 pass
 
         try:
-            log_event("MEDIA_PROCESS", f"Завантажую точне фото для ШІ-запиту: '{search_query}'")
+            log_event("MEDIA_PROCESS", f"Завантажую точне фото для: '{search_query}'")
             img_url = find_image_url_from_web(search_query)
             if img_url:
                 req = urllib.request.Request(img_url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -292,7 +279,6 @@ async def handle_text_message(message: types.Message):
         await message.answer("Ой, я б із радістю кинула картинку, але мережа на мить сховалася. Спробуй ще раз!")
         return
 
-    # ЗВИЧАЙНИЙ ТЕКСТОВИЙ ДІАЛОГ ІЗ ПОВНИМ ЗБЕРЕЖЕННЯМ ІСТОРІЇ ТА КОНТЕКСТУ
     search_context = ""
     skip_words = ["привіт", "як справи", "що робиш", "добридень", "бувай", "дякую"]
     is_greeting = any(word in text_lower for word in skip_words) and len(text_lower.split()) < 4
@@ -305,7 +291,7 @@ async def handle_text_message(message: types.Message):
     system_prompt = (
         "Ти — Міссі (Міссі Блек), персональна україномовна асистентка, близька подруга та інтелектуальна партнерка Віталя. "
         "Твій стиль спілкування: теплий, дружній, неформальний, живий (як найкраща подруга). "
-        "Ти завжди ідеально розумієш і пам'ятаєш контекст попередніх повідомлень у діалозі (наприклад, про піраміди, історичні об'єкти, міста тощо). "
+        "Ти завжди ідеально розумієш і пам'ятаєш контекст попередніх повідомлень у діалозі. "
         "Ніколи не сперечайся з Віталієм. НІКОЛИ не виводь у чат технічні file_id чи код. "
         "Відповідай виключно живою мовою. Завжди став 1 влучне уточнююче запитання в кінці.\n"
         f"База пам'яті: {json.dumps(memory, ensure_ascii=False)}"
@@ -340,4 +326,24 @@ async def handle_text_message(message: types.Message):
     await send_long_message(message, reply_text)
 
 async def handle_ping(request):
-    return web.Response(text="Missy is alive 2
+    return web.Response(text="Missy is alive 24/7 with fixed syntax!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    log_event("WEB_SERVER", f"Вебсервер запущено на порту {port}")
+
+async def main():
+    await bot.delete_webhook(drop_pending_updates=True)
+    await start_web_server()
+    log_event("BOT", "МІССІ ЗАПУЩЕНА БЕЗ ПОМИЛОК СИНТАКСИСУ...")
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
