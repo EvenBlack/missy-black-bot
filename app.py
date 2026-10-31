@@ -19,6 +19,7 @@ from aiogram.filters import Command
 from aiogram.types import BufferedInputFile
 from groq import Groq
 from ddgs import DDGS
+from drive_memory import DriveMemory, MemoryUnavailable, RevisionConflict
 
 # Render Environment Variables
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -58,6 +59,12 @@ histories = {}
 memory_lock = asyncio.Lock()
 user_locks = {}
 user_modes = {}
+DRIVE_MEMORY_URL = os.getenv("DRIVE_MEMORY_URL", "")
+DRIVE_MEMORY_SECRET = os.getenv("DRIVE_MEMORY_SECRET", "")
+if bool(DRIVE_MEMORY_URL) != bool(DRIVE_MEMORY_SECRET):
+    raise RuntimeError("DRIVE_MEMORY_URL і DRIVE_MEMORY_SECRET потрібно налаштувати разом")
+drive_store = DriveMemory(DRIVE_MEMORY_URL, DRIVE_MEMORY_SECRET) if DRIVE_MEMORY_URL else None
+
 
 
 def completion_options(limit=2048):
@@ -105,12 +112,56 @@ def save_memory(data):
         raise
 
 
+async def read_memory():
+    if drive_store is None:
+        return load_memory()
+    data, _ = await drive_store.read()
+    if data is None:
+        raise MemoryUnavailable("MEMORY_NOT_INITIALIZED")
+    return data
+
+
+async def initialize_memory():
+    if drive_store is None:
+        event("MEMORY_BACKEND", "local file only")
+        return
+    async with memory_lock:
+        data, revision = await drive_store.read()
+        if data is None:
+            if revision != 0:
+                raise MemoryUnavailable("UNEXPECTED_EMPTY_MEMORY")
+            # Only bootstrap an explicitly empty store. Existing Drive data wins.
+            data = load_memory()
+            try:
+                await drive_store.write(data, revision)
+            except RevisionConflict:
+                data, _ = await drive_store.read()
+                if data is None:
+                    raise MemoryUnavailable("MEMORY_INITIALIZATION_CONFLICT")
+        event("MEMORY_BACKEND", "Google Drive connected and initialized")
+
+
 async def change_memory(callback):
     async with memory_lock:
-        data = load_memory()
-        callback(data)
-        save_memory(data)
-        return data
+        if drive_store is None:
+            data = load_memory()
+            callback(data)
+            save_memory(data)
+            return data
+        # Re-read and replay pure callbacks after a concurrent-instance conflict.
+        # Never fall back to a local-only write when durable storage is configured.
+        for _ in range(3):
+            data, revision = await drive_store.read()
+            if data is None:
+                raise MemoryUnavailable("MEMORY_NOT_INITIALIZED")
+            callback(data)
+            try:
+                await drive_store.write(data, revision)
+                event("MEMORY_SAVED", "Google Drive write acknowledged")
+                return data
+            except RevisionConflict:
+                continue
+        raise MemoryUnavailable("MEMORY_CONCURRENT_WRITES")
 
 
 def has_access(message):
@@ -1047,10 +1098,10 @@ async def status_command(message: types.Message):
     if not await check_access(message):
         return
     try:
-        load_memory()
-        memory_status = "файл читається; стійкість після деплою залежить від зовнішнього сховища"
+        await read_memory()
+        memory_status = "Google Drive підключено; дані читаються із зовнішнього сховища" if drive_store else "локальний файл; збереження після заміни контейнера не гарантоване"
     except Exception:
-        memory_status = "файл пошкоджений або недоступний"
+        memory_status = "сховище недоступне; збереження спогадів зараз не підтверджене"
     vision = "налаштована; потрібна перевірка запитом" if CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN else "не налаштована"
     await message.answer(f"Бот працює.\nПам'ять: {memory_status}.\nПеревірка фото: {vision}.\nВебпошук: кілька пошукових джерел; доступність перевіряється під час запиту.")
 
@@ -1075,7 +1126,7 @@ async def receive_photo(message: types.Message):
     except Exception:
         await message.answer("Не вдалося зберегти фото в пам'ять. Файл пам'яті потребує перевірки.")
         return
-    await message.answer("Записала посилання Telegram на фото і підпис. Це ще не резервна копія оригіналу.")
+    await message.answer("Зберегла посилання Telegram на фото і підпис" + (" у Google Drive. " if drive_store else ". ") + "Це ще не резервна копія оригіналу.")
 
 
 @dp.message(F.text)
@@ -1107,7 +1158,7 @@ async def handle_text(message: types.Message):
     uid = message.from_user.id
     history = histories.setdefault(uid, [])
     try:
-        memory = load_memory()
+        memory = await read_memory()
         memory_error = False
     except RuntimeError:
         memory = {"факти": [], "image_cache": {}, "фото": []}
@@ -1122,12 +1173,14 @@ async def handle_text(message: types.Message):
             data["факти"] = data["факти"][-100:]
 
         try:
-            await change_memory(add_fact)
-            memory = load_memory()
+            memory = await change_memory(add_fact)
         except Exception:
-            await message.answer("Не змогла записати спогад: файл пам'яті недоступний або пошкоджений. Не буду стверджувати, що зберегла його.")
+            await message.answer("Не змогла записати спогад: сховище пам'яті недоступне або повернуло помилку. Не буду стверджувати, що зберегла його.")
             return
-        await message.answer("Записала цей факт у поточний файл пам'яті. Збереження після нового деплою ще потребує зовнішнього сховища.")
+        if drive_store:
+            await message.answer("Запам'ятала й зберегла цей факт у Google Drive.")
+        else:
+            await message.answer("Записала цей факт у поточний файл пам'яті. Збереження після нового деплою ще потребує зовнішнього сховища.")
         return
 
     if image_request(text):
@@ -1404,6 +1457,7 @@ async def main():
     runner = None
 
     try:
+        await initialize_memory()
         await bot.delete_webhook(drop_pending_updates=False)
         runner = await start_web()
         event("BOT", "MISSY STARTED")
