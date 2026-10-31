@@ -10,6 +10,7 @@ from io import BytesIO
 from pathlib import Path
 
 import aiohttp
+from aiohttp import web
 from PIL import Image, UnidentifiedImageError
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
@@ -133,8 +134,6 @@ UKRAINIAN_IMAGE_WORDS = {
     "птахи": "birds",
     "кінь": "horse",
     "коня": "horse",
-    "кінь": "horse",
-    "кінь": "horse",
     "лев": "lion",
     "лева": "lion",
     "тигр": "tiger",
@@ -215,7 +214,7 @@ UKRAINIAN_NON_SUBJECT_WORDS = {
     "знайди", "знайти", "покажи", "надішли", "скинь", "пришли",
     "відшукай", "дай", "мені", "будь", "ласка", "фото", "фотографію",
     "фотографії", "картинку", "картин", "зображення", "зображенням",
-    "будьласка", "мені", "прошу",
+    "будьласка", "прошу",
 }
 
 
