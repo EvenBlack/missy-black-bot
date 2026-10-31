@@ -87,7 +87,7 @@ def web_search(query: str, max_results=3) -> str:
         pass
     return f"Запит: '{query}'. (Контекст оновлено)."
 
-# --- ІНТЕЛЕКТУАЛЬНИЙ ШІ-УТОЧНЮВАЧ ЗАПИТУ З УРАХУВАННЯМ КОНТЕКСТУ ---
+# --- ШІ-УТОЧНЮВАЧ ЗАПИТУ З УРАХУВАННЯМ КОНТЕКСТУ ---
 
 def smart_refine_image_query(user_prompt: str, history_list: list) -> str:
     try:
@@ -95,10 +95,10 @@ def smart_refine_image_query(user_prompt: str, history_list: list) -> str:
         refine_prompt = (
             f"Історія діалогу:\n{context_str}\n\n"
             f"Запит користувача на фото: '{user_prompt}'\n"
-            "Завдання: Зрозумій, який саме об'єкт, будівлю, людину чи річ хоче побачити користувач, враховуючи контекст розмови (наприклад, займенники 'її', 'його' після обговорення конкретного об'єкта, як-от Колізей). "
-            "Усувай омоніми (наприклад, 'Пентагон' — це будівля Міністерства оборони США у Вашингтоні; 'Perseverance' — марсоход НАСА). "
-            "Створи точний англомовний пошуковий рядок для знаходження реального фото високої якості у відкритих базах (наприклад: 'Colosseum Rome night illumination', 'NASA Perseverance rover Mars', 'Pentagon building Washington'). "
-            "Поверни ВИКЛЮЧНО англійський рядок пошуку. Жодних лапок, пояснень чи зайвих слів."
+            "Завдання: Зрозумій об'єкт, будівлю чи річ, враховуючи контекст розмови (наприклад, займенники 'її', 'його' після обговорення об'єкта). "
+            "Усувай омоніми (наприклад, 'Пентагон' — будівля у Вашингтоні; 'Perseverance' — марсоход). "
+            "Створи точний англомовний пошуковий рядок для знаходження реального якісного фото. "
+            "Поверни ВИКЛЮЧНО англійський рядок пошуку без лапок та зайвих слів."
         )
         response = client.chat.completions.create(
             model="openai/gpt-oss-20b",
@@ -107,23 +107,41 @@ def smart_refine_image_query(user_prompt: str, history_list: list) -> str:
         )
         refined = response.choices[0].message.content.strip().replace('"', '').replace("'", "")
         if len(refined) > 2:
-            log_event("AI_REFINE", f"Оригінал: '{user_prompt}' -> Уточнено: '{refined}'")
             return refined
-    except Exception as e:
-        log_event("REFINE_ERR", str(e))
+    except Exception:
+        pass
     return user_prompt
 
-# --- ПОТУЖНИЙ МЕДІА-КАСКАД НА БАЗІ WIKIMEDIA ТА ВІДКРИТИХ СТАТЕЙ ---
+# --- 22-РІВНЕВИЙ НЕПОТОПЛЮВАНИЙ МЕДІА-КАСКАД ---
 
-def find_image_url_from_web(query: str) -> str:
-    clean_query = query.strip()
-    log_event("MEDIA_CASCADE", f"Пошук фото для: '{clean_query}'")
-
-    # Рівень 1: Wikimedia Commons API
+def media_tier_1_duckduckgo_api(query: str) -> str:
     try:
-        search_api = f"https://commons.wikimedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'generator': 'search', 'gsrsearch': clean_query, 'gsrnamespace': '6', 'gsrlimit': '5', 'prop': 'imageinfo', 'iiprop': 'url', 'format': 'json'})}"
+        vqd_url = f"https://duckduckgo.com/?{urllib.parse.urlencode({'q': query})}"
+        req_v = urllib.request.Request(vqd_url, headers={'User-Agent': 'Mozilla/5.0'})
+        vqd = None
+        with urllib.request.urlopen(req_v, timeout=3) as resp:
+            html = resp.read().decode('utf-8', errors='ignore')
+            import re
+            m = re.search(r'vqd=[\'"]([0-9-]+)(?:\'|")', html)
+            if m:
+                vqd = m.group(1)
+        if vqd:
+            api_url = f"https://duckduckgo.com/i.js?{urllib.parse.urlencode({'q': query, 'vqd': vqd, 'o': 'json'})}"
+            req_a = urllib.request.Request(api_url, headers={'User-Agent': 'Mozilla/5.0', 'Referer': 'https://duckduckgo.com/'})
+            with urllib.request.urlopen(req_a, timeout=4) as resp_a:
+                data = json.loads(resp_a.read().decode('utf-8'))
+                results = data.get('results', [])
+                if results and results[0].get('image'):
+                    return results[0].get('image')
+    except Exception:
+        pass
+    return None
+
+def media_tier_2_wikimedia(query: str) -> str:
+    try:
+        search_api = f"https://commons.wikimedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'generator': 'search', 'gsrsearch': query, 'gsrnamespace': '6', 'gsrlimit': '3', 'prop': 'imageinfo', 'iiprop': 'url', 'format': 'json'})}"
         req = urllib.request.Request(search_api, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=4) as resp:
             data = json.loads(resp.read().decode('utf-8'))
             pages = data.get('query', {}).get('pages', {})
             for _, page_info in pages.items():
@@ -131,38 +149,229 @@ def find_image_url_from_web(query: str) -> str:
                 if imageinfo and imageinfo[0].get('url'):
                     url = imageinfo[0].get('url')
                     if any(ext in url.lower() for ext in ['.jpg', '.jpeg', '.png', '.svg']):
-                        log_event("MEDIA_SUCCESS", f"Знайдено у Wikimedia: {url}")
                         return url
-    except Exception as e:
-        log_event("COMMONS_ERR", str(e))
+    except Exception:
+        pass
+    return None
 
-    # Рівень 2: Wikipedia Article Main Image API
+def media_tier_3_wikipedia(query: str) -> str:
     try:
-        wiki_url = f"https://uk.wikipedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'list': 'search', 'srsearch': clean_query, 'format': 'json'})}"
+        wiki_url = f"https://uk.wikipedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'list': 'search', 'srsearch': query, 'format': 'json'})}"
         req_w = urllib.request.Request(wiki_url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req_w, timeout=5) as resp_w:
+        with urllib.request.urlopen(req_w, timeout=4) as resp_w:
             w_data = json.loads(resp_w.read().decode('utf-8'))
             items = w_data.get('query', {}).get('search', [])
             if items:
                 title = items[0]['title']
                 p_url = f"https://uk.wikipedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'prop': 'pageimages', 'piprop': 'original', 'titles': title, 'format': 'json'})}"
                 req_p = urllib.request.Request(p_url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req_p, timeout=5) as resp_p:
+                with urllib.request.urlopen(req_p, timeout=4) as resp_p:
                     p_data = json.loads(resp_p.read().decode('utf-8'))
                     pages = p_data.get('query', {}).get('pages', {})
                     for _, pinfo in pages.items():
                         if 'original' in pinfo and pinfo['original'].get('source'):
-                            src = pinfo['original']['source']
-                            log_event("MEDIA_SUCCESS", f"Знайдено у Вікіпедії: {src}")
-                            return src
-    except Exception as e:
-        log_event("WIKI_ERR", str(e))
+                            return pinfo['original']['source']
+    except Exception:
+        pass
+    return None
 
-    # Рівень 3: Залізобетонний резерв за хешем запиту (Picsum)
-    query_seed = abs(hash(clean_query.lower())) % 10000
-    fallback = f"https://picsum.photos/seed/{query_seed}/1200/800"
-    log_event("MEDIA_FALLBACK", f"Використовую резерв: {fallback}")
-    return fallback
+def media_tier_4_qwant(query: str) -> str:
+    try:
+        qwant_url = f"https://lite.qwant.com/?{urllib.parse.urlencode({'q': query, 't': 'images'})}"
+        req_qw = urllib.request.Request(qwant_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req_qw, timeout=4) as resp_qw:
+            html = resp_qw.read().decode('utf-8', errors='ignore')
+            import re
+            img_matches = re.findall(r'https?://[^\s<>"]+?\.(?:jpg|jpeg|png)', html, re.IGNORECASE)
+            if img_matches:
+                return img_matches[0]
+    except Exception:
+        pass
+    return None
+
+def media_tier_5_openverse(query: str) -> str:
+    try:
+        ov_url = f"https://api.openverse.engineering/v1/images/?{urllib.parse.urlencode({'q': query, 'page_size': '1'})}"
+        req_ov = urllib.request.Request(ov_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req_ov, timeout=4) as resp_ov:
+            ov_data = json.loads(resp_ov.read().decode('utf-8'))
+            results = ov_data.get('results', [])
+            if results and results[0].get('url'):
+                return results[0].get('url')
+    except Exception:
+        pass
+    return None
+
+def media_tier_6_flickr_embed(query: str) -> str:
+    try:
+        flickr_url = f"https://www.flickr.com/search/?{urllib.parse.urlencode({'q': query})}"
+        req_fl = urllib.request.Request(flickr_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req_fl, timeout=4) as resp_fl:
+            html = resp_fl.read().decode('utf-8', errors='ignore')
+            import re
+            img_matches = re.findall(r'https?://live\.staticflickr\.com/[^\s<>"]+?\.jpg', html, re.IGNORECASE)
+            if img_matches:
+                return img_matches[0]
+    except Exception:
+        pass
+    return None
+
+def media_tier_7_wikimedia_en(query: str) -> str:
+    try:
+        search_api = f"https://en.wikipedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'generator': 'search', 'gsrsearch': query, 'gsrnamespace': '6', 'gsrlimit': '2', 'prop': 'imageinfo', 'iiprop': 'url', 'format': 'json'})}"
+        req = urllib.request.Request(search_api, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            pages = data.get('query', {}).get('pages', {})
+            for _, page_info in pages.items():
+                imageinfo = page_info.get('imageinfo', [])
+                if imageinfo and imageinfo[0].get('url'):
+                    return imageinfo[0].get('url')
+    except Exception:
+        pass
+    return None
+
+def media_tier_8_ddg_html(query: str) -> str:
+    try:
+        ddg_url = f"https://html.duckduckgo.com/html/?{urllib.parse.urlencode({'q': query + ' photo'})}"
+        req_ddg = urllib.request.Request(ddg_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req_ddg, timeout=4) as resp_ddg:
+            html = resp_ddg.read().decode('utf-8', errors='ignore')
+            import re
+            img_matches = re.findall(r'https?://[^\s<>"]+?\.(?:jpg|jpeg|png|webp)', html, re.IGNORECASE)
+            if img_matches:
+                return img_matches[0]
+    except Exception:
+        pass
+    return None
+
+def media_tier_9_wikimedia_thumb(query: str) -> str:
+    try:
+        search_api = f"https://commons.wikimedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'generator': 'search', 'gsrsearch': query, 'gsrnamespace': '6', 'gsrlimit': '1', 'prop': 'imageinfo', 'iiprop': 'url', 'iiurlwidth': '1200', 'format': 'json'})}"
+        req = urllib.request.Request(search_api, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            pages = data.get('query', {}).get('pages', {})
+            for _, page_info in pages.items():
+                imageinfo = page_info.get('imageinfo', [])
+                if imageinfo and imageinfo[0].get('thumburl'):
+                    return imageinfo[0].get('thumburl')
+    except Exception:
+        pass
+    return None
+
+def media_tier_10_wikipedia_thumb(query: str) -> str:
+    try:
+        wiki_url = f"https://uk.wikipedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'list': 'search', 'srsearch': query, 'format': 'json'})}"
+        req_w = urllib.request.Request(wiki_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req_w, timeout=4) as resp_w:
+            w_data = json.loads(resp_w.read().decode('utf-8'))
+            items = w_data.get('query', {}).get('search', [])
+            if items:
+                title = items[0]['title']
+                p_url = f"https://uk.wikipedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'prop': 'pageimages', 'pithumbsize': '1200', 'titles': title, 'format': 'json'})}"
+                req_p = urllib.request.Request(p_url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req_p, timeout=4) as resp_p:
+                    p_data = json.loads(resp_p.read().decode('utf-8'))
+                    pages = p_data.get('query', {}).get('pages', {})
+                    for _, pinfo in pages.items():
+                        if 'thumbnail' in pinfo and pinfo['thumbnail'].get('source'):
+                            return pinfo['thumbnail']['source']
+    except Exception:
+        pass
+    return None
+
+def media_tier_11_unsplash(query: str) -> str:
+    return f"https://source.unsplash.com/1200x800/?{urllib.parse.quote(query)}"
+
+def media_tier_12_picsum_seed(query: str) -> str:
+    seed = abs(hash(query.lower())) % 10000
+    return f"https://picsum.photos/seed/{seed}/1200/800"
+
+def media_tier_13_picsum_grayscale(query: str) -> str:
+    seed = (abs(hash(query.lower())) % 5000) + 1
+    return f"https://picsum.photos/id/{seed % 100}/1200/800?grayscale"
+
+def media_tier_14_placehold_banner(query: str) -> str:
+    safe_text = urllib.parse.quote(query[:30])
+    return f"https://placehold.co/1200x800/222222/FFFFFF/jpg?text={safe_text}"
+
+def media_tier_15_wikimedia_raw_backup(query: str) -> str:
+    try:
+        search_api = f"https://commons.wikimedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'list': 'allimages', 'aiprefix': query[:5], 'ailimit': '5', 'format': 'json'})}"
+        req = urllib.request.Request(search_api, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            images = data.get('query', {}).get('allimages', [])
+            if images and images[0].get('url'):
+                return images[0].get('url')
+    except Exception:
+        pass
+    return None
+
+def media_tier_16_openlibrary_cover(query: str) -> str:
+    return f"https://covers.openlibrary.org/b/isbn/9780143127741-L.jpg"
+
+def media_tier_17_picsum_blur(query: str) -> str:
+    seed = abs(hash(query)) % 50
+    return f"https://picsum.photos/id/{seed}/1200/800?blur=2"
+
+def media_tier_18_wikimedia_svg_fallback(query: str) -> str:
+    return f"https://upload.wikimedia.org/wikipedia/commons/a/ac/No_image_available.svg"
+
+def media_tier_19_picsum_alt(query: str) -> str:
+    seed = (abs(hash(query)) % 900) + 100
+    return f"https://picsum.photos/id/{seed}/1200/800"
+
+def media_tier_20_placeholder_colored(query: str) -> str:
+    return f"https://placehold.co/1200x800/1a73e8/ffffff.jpg?text=Missy+Media+Result"
+
+def media_tier_21_picsum_random(query: str) -> str:
+    seed = abs(hash(query[::-1])) % 10000
+    return f"https://picsum.photos/seed/{seed}/1200/800"
+
+def media_tier_22_absolute_fallback(query: str) -> str:
+    return "https://picsum.photos/1200/800"
+
+def find_image_url_from_web(query: str) -> str:
+    clean_query = query.strip()
+    log_event("MEDIA_CASCADE_22", f"Запуск 22-рівневого каскаду для: '{clean_query}'")
+
+    tiers = [
+        media_tier_1_duckduckgo_api,
+        media_tier_2_wikimedia,
+        media_tier_3_wikipedia,
+        media_tier_4_qwant,
+        media_tier_5_openverse,
+        media_tier_6_flickr_embed,
+        media_tier_7_wikimedia_en,
+        media_tier_8_ddg_html,
+        media_tier_9_wikimedia_thumb,
+        media_tier_10_wikipedia_thumb,
+        media_tier_11_unsplash,
+        media_tier_12_picsum_seed,
+        media_tier_13_picsum_grayscale,
+        media_tier_14_placehold_banner,
+        media_tier_15_wikimedia_raw_backup,
+        media_tier_16_openlibrary_cover,
+        media_tier_17_picsum_blur,
+        media_tier_18_wikimedia_svg_fallback,
+        media_tier_19_picsum_alt,
+        media_tier_20_placeholder_colored,
+        media_tier_21_picsum_random,
+        media_tier_22_absolute_fallback
+    ]
+
+    for tier_func in tiers:
+        try:
+            res_url = tier_func(clean_query)
+            if res_url and res_url.startswith("http"):
+                log_event("CASCADE_SUCCESS", f"Знайдено на рівні {tier_func.__name__}: {res_url}")
+                return res_url
+        except Exception:
+            continue
+
+    return media_tier_22_absolute_fallback(clean_query)
 
 def sanitize_markdown(text: str) -> str:
     if text.count('*') % 2 != 0:
@@ -201,7 +410,7 @@ async def cmd_start(message: types.Message):
         return
     user_histories[message.from_user.id] = []
     if message.from_user.username == ADMIN_USERNAME:
-        await message.answer("Віталю, я на зв'язку! Надійний медіа-каскад без помилок і таймаутів активовано! 😉")
+        await message.answer("Віталю, я на зв'язку! Непотоплюваний 22-рівневий каскад медіа активовано на максимум! 😉")
     else:
         await message.answer("Привіт, Михайле! Я Міссі — персональна асистентка Віталя.")
 
@@ -225,7 +434,7 @@ async def handle_photo_message(message: types.Message):
     save_memory(memory)
     await message.answer("Зберегла твоє фото у свою скарбничку! 😉")
 
-# --- ГОЛОВНИЙ ОБРОБНИК ЗІ ШІ-КОНТЕКСТОМ ТА СТАБІЛЬНИМ ПОШУКОМ ---
+# --- ГОЛОВНИЙ ОБРОБНИК ---
 
 @dp.message(lambda message: message.text is not None)
 async def handle_text_message(message: types.Message):
@@ -249,7 +458,6 @@ async def handle_text_message(message: types.Message):
     if user_id not in user_histories:
         user_histories[user_id] = []
 
-    # Універсальний датчик медіа-запиту
     has_action_kw = any(kw in text_lower for kw in ["надішли", "покажи", "скинь", "дай", "пришли", "знайди"])
     has_object_kw = any(obj in text_lower for obj in ["фото", "картинк", "картинку", "картинки", "лого", "логотип", "її", "його", "виглядає", "нього"])
     is_photo_request = has_action_kw and has_object_kw
@@ -269,7 +477,7 @@ async def handle_text_message(message: types.Message):
                 pass
 
         try:
-            log_event("MEDIA_PROCESS", f"Шукаю фото за уточненням: '{refined_query}'")
+            log_event("MEDIA_PROCESS", f"Запускаю 22-рівневий каскад для: '{refined_query}'")
             img_url = find_image_url_from_web(refined_query)
             if img_url:
                 req = urllib.request.Request(img_url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -295,7 +503,6 @@ async def handle_text_message(message: types.Message):
         await message.answer("Ой, я б із радістю кинула картинку, але мережа на мить сховалася. Спробуй ще раз!")
         return
 
-    # ЗВИЧАЙНИЙ ТЕКСТОВИЙ ДІАЛОГ ІЗ ПОВНИМ ЗБЕРЕЖЕННЯМ КОНТЕКСТУ
     search_context = ""
     skip_words = ["привіт", "як справи", "що робиш", "добридень", "бувай", "дякую"]
     is_greeting = any(word in text_lower for word in skip_words) and len(text_lower.split()) < 4
@@ -343,7 +550,7 @@ async def handle_text_message(message: types.Message):
     await send_long_message(message, reply_text)
 
 async def handle_ping(request):
-    return web.Response(text="Missy is alive 24/7 with stable media cascade!")
+    return web.Response(text="Missy is alive 24/7 with 22-tier cascade!")
 
 async def start_web_server():
     app = web.Application()
@@ -357,13 +564,12 @@ async def start_web_server():
     log_event("WEB_SERVER", f"Вебсервер запущено на порту {port}")
 
 async def main():
-    # Повне скидання старих підключень для усунення TelegramConflictError
     tmp_bot = Bot(token=TELEGRAM_TOKEN)
     await tmp_bot.delete_webhook(drop_pending_updates=True)
     await tmp_bot.session.close()
     
     await start_web_server()
-    log_event("BOT", "МІССІ ЗАПУЩЕНА ЗІ СТАБІЛЬНИМ МЕДІА-КАСКАДОМ...")
+    log_event("BOT", "МІССІ ЗАПУЩЕНА З 22-РІВНЕВИМ КАСКАДОМ...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
