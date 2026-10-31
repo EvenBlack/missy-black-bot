@@ -175,10 +175,12 @@ async def openverse_auth(session):
 
 async def search_openverse(session, query):
     headers = {"User-Agent": USER_AGENT}
+    stage = "auth"
     try:
         token = await openverse_auth(session)
         if token:
             headers["Authorization"] = f"Bearer {token}"
+        stage = "image_search"
         payload = await request_json(
             session,
             "https://api.openverse.org/v1/images/",
@@ -186,6 +188,7 @@ async def search_openverse(session, query):
             headers,
         )
         results = payload.get("results", [])
+        event("OPENVERSE_RAW_RESULTS", f"{len(results)} results for {query!r}")
         results.sort(
             key=lambda x: score_result(query, x.get("title", ""), x.get("tags")),
             reverse=True,
@@ -206,7 +209,7 @@ async def search_openverse(session, query):
         event("IMAGE_CANDIDATES", f"Openverse: {len(candidates)} candidates from {len(results)} results")
         return candidates
     except Exception as exc:
-        event("OPENVERSE_ERROR", f"{type(exc).__name__}: {exc}")
+        event("OPENVERSE_ERROR", f"stage={stage}; {type(exc).__name__}: {exc}")
         return []
 
 
@@ -222,8 +225,9 @@ async def search_wikimedia(session, query):
             session, "https://commons.wikimedia.org/w/api.php",
             params, {"User-Agent": USER_AGENT},
         )
-        pages = payload.get("query", {}).get("pages", {}).values()
+        pages = list(payload.get("query", {}).get("pages", {}).values())
         ranked = []
+        rejected = []
         for page in pages:
             title = page.get("title", "")
             info = (page.get("imageinfo") or [{}])[0]
@@ -231,6 +235,15 @@ async def search_wikimedia(session, query):
             points = score_result(query, title)
             if url and points >= 1:
                 ranked.append((points, title, url))
+            elif len(rejected) < 8:
+                rejected.append(
+                    f"{title!r} (score={points}, url={'yes' if url else 'no'})"
+                )
+        event(
+            "WIKIMEDIA_DIAGNOSTIC",
+            f"query={query!r}; raw={len(pages)}; matched={len(ranked)}; "
+            f"rejected_sample={'; '.join(rejected) or 'none'}",
+        )
         ranked.sort(reverse=True)
         candidates = [
             {"url": url, "title": title, "source": "Wikimedia Commons"}
@@ -497,6 +510,7 @@ async def text_handler(message: types.Message):
             except Exception as exc:
                 event("IMAGE_CACHE_ERROR", str(exc))
 
+        event("QUERY_REFINED", f"original={text!r}; refined={query!r}")
         event("IMAGE_SEARCH", repr(query))
         try:
             found = await asyncio.wait_for(
