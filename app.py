@@ -1,4 +1,3 @@
-
 import os
 import re
 import json
@@ -107,16 +106,38 @@ async def check_access(message):
 
 
 def image_request(text):
-    low = text.lower()
-    actions = ("надішли", "покажи", "скинь", "дай", "пришли", "знайди", "відшукай")
-    objects = ("фото", "фотограф", "картин", "зображен", "лого", "логотип")
-    return any(x in low for x in actions) and any(x in low for x in objects)
+    low = re.sub(r"\s+", " ", text.lower()).strip()
+    actions = (
+        "надішли", "покажи", "скинь", "дай", "пришли",
+        "знайди", "відшукай", "підбери",
+    )
+    objects = (
+        "фото", "фотограф", "картин", "зображен",
+        "лого", "логотип", "світлину",
+    )
+
+    has_object = any(word in low for word in objects)
+    has_action = any(word in low for word in actions)
+    starts_with_object = bool(
+        re.match(
+            r"^(?:фото|фотограф\w*|картин\w*|зображен\w*|світлин\w*)\b",
+            low,
+        )
+    )
+    return has_object and (has_action or starts_with_object)
 
 
 # Резервний словник для поширених українських запитів.
 # Він використовується, якщо мовна модель не змогла перекласти запит.
 UKRAINIAN_IMAGE_WORDS = {
     "кіт": "cat",
+    "хмара": "cloud",
+    "хмари": "clouds",
+    "хмару": "cloud",
+    "хмар": "clouds",
+    "шоколадка": "chocolate bar",
+    "шоколадки": "chocolate bars",
+    "баунті": "Bounty chocolate bar",
     "кота": "cat",
     "коту": "cat",
     "котом": "cat",
@@ -214,7 +235,7 @@ UKRAINIAN_IMAGE_WORDS = {
 
 UKRAINIAN_NON_SUBJECT_WORDS = {
     "знайди", "знайти", "покажи", "надішли", "скинь", "пришли",
-    "відшукай", "дай", "мені", "будь", "ласка", "фото", "фотографію",
+    "відшукай", "підбери", "дай", "мені", "будь", "ласка", "фото", "фотографію",
     "фотографії", "картинку", "картин", "зображення", "зображенням",
     "будьласка", "прошу",
 }
@@ -272,27 +293,52 @@ def refine_query(text, history):
 
     for attempt, prompt in enumerate(prompts, start=1):
         try:
-            result = groq_client.chat.completions.create(
+            response = groq_client.chat.completions.create(
                 model=GROQ_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0,
-                max_tokens=40,
-            ).choices[0].message.content or ""
+                reasoning_effort="low",
+                max_completion_tokens=512,
+            )
 
-            result = re.sub(r"\s+", " ", result.strip().strip("\"'`"))
+            choice = response.choices[0]
+            message = choice.message
+            result = message.content or ""
+            finish_reason = getattr(choice, "finish_reason", None)
+            usage = getattr(response, "usage", None)
+            completion_tokens = getattr(usage, "completion_tokens", None)
+            details = getattr(usage, "completion_tokens_details", None)
+            reasoning_tokens = getattr(details, "reasoning_tokens", None)
+
+            if not result.strip():
+                event(
+                    "QUERY_TRANSLATION_EMPTY",
+                    f"attempt={attempt}; finish_reason={finish_reason}; "
+                    f"completion_tokens={completion_tokens}; "
+                    f"reasoning_tokens={reasoning_tokens}",
+                )
+                continue
+
+            result = re.sub(r"\s+", " ", result.strip().strip(chr(34) + chr(39) + chr(96)))
             result = re.sub(r"^(query|search query)\s*:\s*", "", result, flags=re.I)
             result = result.strip(" .,:;")
 
             if is_english_query(result) and 1 < len(result) <= 120:
                 event(
                     "QUERY_TRANSLATION_SUCCESS",
-                    f"attempt={attempt}; query={result!r}",
+                    f"attempt={attempt}; query={result!r}; "
+                    f"finish_reason={finish_reason}; "
+                    f"completion_tokens={completion_tokens}; "
+                    f"reasoning_tokens={reasoning_tokens}",
                 )
                 return result
 
             event(
                 "QUERY_TRANSLATION_REJECTED",
-                f"attempt={attempt}; result={result[:100]!r}",
+                f"attempt={attempt}; result={result[:100]!r}; "
+                f"finish_reason={finish_reason}; "
+                f"completion_tokens={completion_tokens}; "
+                f"reasoning_tokens={reasoning_tokens}",
             )
 
         except Exception as exc:
@@ -300,6 +346,7 @@ def refine_query(text, history):
                 "QUERY_REFINEMENT_ERROR",
                 f"attempt={attempt}; {type(exc).__name__}: {exc}",
             )
+
 
     fallback = fallback_english_query(text)
     if fallback:
