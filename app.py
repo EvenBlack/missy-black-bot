@@ -1,20 +1,26 @@
 import os
+import re
 import json
 import asyncio
 import logging
+import shutil
+from io import BytesIO
 from html.parser import HTMLParser
 from typing import Optional
 
 import aiohttp
 from aiohttp import web
+from PIL import Image, UnidentifiedImageError
+
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import BufferedInputFile
+from aiogram.exceptions import TelegramConflictError, TelegramNetworkError
 from groq import Groq
 
 
 # ============================================================
-# НАЛАШТУВАННЯ
+# 1. НАЛАШТУВАННЯ
 # ============================================================
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -24,24 +30,47 @@ ADMIN_USERNAME = "E_n_gram"
 ALLOWED_USERNAMES = {"E_n_gram", "MykhailoTa"}
 
 MEMORY_FILE = "missy_memory.json"
+
 MAX_HISTORY_LENGTH = 15
 MAX_IMAGE_BYTES = 9 * 1024 * 1024
-HTTP_TIMEOUT = aiohttp.ClientTimeout(total=15, connect=7)
+MAX_IMAGE_SIDE = 2000
 
-USER_AGENT = "MissyTelegramBot/1.0"
+HTTP_TIMEOUT = aiohttp.ClientTimeout(
+    total=20,
+    connect=8
+)
+
+USER_AGENT = "MissyTelegramBot/1.0 (personal assistant)"
 
 if not TELEGRAM_TOKEN:
-    raise RuntimeError("Не задано змінну середовища TELEGRAM_TOKEN")
+    raise RuntimeError(
+        "Не задано змінну середовища TELEGRAM_TOKEN"
+    )
+
+if not GROQ_API_KEY:
+    logging.warning(
+        "GROQ_API_KEY не задано. ШІ-функції будуть недоступні."
+    )
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-user_histories: dict[int, list[dict[str, str]]] = {}
+user_histories = {}
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s:%(name)s:%(message)s"
+)
+
 logger = logging.getLogger("missy")
+
+# Не дозволяємо двом обробникам одночасно змінювати пам'ять.
+memory_lock = asyncio.Lock()
+
+# Захист від паралельного пошуку однакових зображень.
+image_search_locks = {}
 
 
 def log_event(event_type: str, details: str):
@@ -49,53 +78,70 @@ def log_event(event_type: str, details: str):
 
 
 # ============================================================
-# ПАМ'ЯТЬ
+# 2. ПАМ'ЯТЬ
 # ============================================================
+
+def default_memory():
+    return {
+        "image_cache": {},
+        "фото": [],
+        "факти": []
+    }
+
 
 def load_memory() -> dict:
     if not os.path.exists(MEMORY_FILE):
-        return {
-            "image_cache": {},
-            "фото": [],
-            "факти": []
-        }
+        return default_memory()
 
     try:
         with open(MEMORY_FILE, "r", encoding="utf-8") as file:
-            data = json.load(file)
+            raw = file.read()
+
+        try:
+            data = json.loads(raw)
+
+        except json.JSONDecodeError:
+            # Спроба врятувати перший коректний JSON-об'єкт.
+            decoder = json.JSONDecoder()
+            data, end = decoder.raw_decode(raw)
+
+            backup = MEMORY_FILE + ".broken"
+
+            if not os.path.exists(backup):
+                shutil.copy2(MEMORY_FILE, backup)
+
+            log_event(
+                "MEMORY_RECOVERY",
+                f"Зайві дані після позиції {end}. "
+                f"Резервна копія: {backup}"
+            )
 
         if not isinstance(data, dict):
-            return {
-                "image_cache": {},
-                "фото": [],
-                "факти": []
-            }
+            raise ValueError("Некоректна структура пам'яті")
 
-        data.setdefault("image_cache", {})
-        data.setdefault("фото", [])
-        data.setdefault("факти", [])
+        defaults = default_memory()
 
-        if not isinstance(data["image_cache"], dict):
-            data["image_cache"] = {}
-
-        if not isinstance(data["фото"], list):
-            data["фото"] = []
-
-        if not isinstance(data["факти"], list):
-            data["факти"] = []
+        for key, value in defaults.items():
+            if not isinstance(data.get(key), type(value)):
+                data[key] = value
 
         data["фото"] = data["фото"][-50:]
+        data["факти"] = data["факти"][-200:]
 
         return data
 
-    except (OSError, json.JSONDecodeError) as error:
+    except Exception as error:
         log_event("MEMORY_ERROR", str(error))
 
-        return {
-            "image_cache": {},
-            "фото": [],
-            "факти": []
-        }
+        backup = MEMORY_FILE + ".broken"
+
+        try:
+            if os.path.exists(MEMORY_FILE) and not os.path.exists(backup):
+                shutil.copy2(MEMORY_FILE, backup)
+        except OSError:
+            pass
+
+        return default_memory()
 
 
 def save_memory(memory_data: dict):
@@ -115,9 +161,22 @@ def save_memory(memory_data: dict):
     except OSError as error:
         log_event("MEMORY_SAVE_ERROR", str(error))
 
+        try:
+            if os.path.exists(temporary_file):
+                os.remove(temporary_file)
+        except OSError:
+            pass
+
+
+async def update_memory(callback):
+    async with memory_lock:
+        memory = load_memory()
+        callback(memory)
+        save_memory(memory)
+
 
 # ============================================================
-# ПОШУК ТЕКСТОВОЇ ІНФОРМАЦІЇ
+# 3. ПОШУК ТЕКСТОВОЇ ІНФОРМАЦІЇ
 # ============================================================
 
 class DDGLiteParser(HTMLParser):
@@ -132,15 +191,11 @@ class DDGLiteParser(HTMLParser):
         if tag == "a":
             classes = dict(attrs).get("class", "")
 
-            if any(
-                name in classes
-                for name in ("result-link", "result-snippet")
-            ):
+            if "result-link" in classes or "result-snippet" in classes:
                 self.in_result = True
 
     def handle_endtag(self, tag):
         if tag == "a" and self.in_result:
-
             value = self.current_text.strip()
 
             if value:
@@ -155,7 +210,6 @@ class DDGLiteParser(HTMLParser):
 
 
 async def web_search(query: str, max_results: int = 3) -> str:
-
     url = "https://lite.duckduckgo.com/lite/"
 
     try:
@@ -170,7 +224,6 @@ async def web_search(query: str, max_results: int = 3) -> str:
             ) as response:
 
                 response.raise_for_status()
-
                 html = await response.text(errors="ignore")
 
         parser = DDGLiteParser()
@@ -186,7 +239,7 @@ async def web_search(query: str, max_results: int = 3) -> str:
 
 
 # ============================================================
-# УТОЧНЕННЯ ПОШУКОВОГО ЗАПИТУ
+# 4. УТОЧНЕННЯ ЗАПИТУ ЧЕРЕЗ GROQ
 # ============================================================
 
 def _refine_image_query_sync(
@@ -205,13 +258,15 @@ def _refine_image_query_sync(
 
         prompt = (
             f"Історія діалогу:\n{context}\n\n"
-            f"Запит користувача: {user_prompt}\n"
-            "Сформуй точний англомовний пошуковий запит "
-            "для пошуку реального фото. "
-            "Врахуй контекст і займенники. "
-            "Не додавай вигаданих деталей. "
-            "Поверни лише пошуковий запит англійською, "
-            "без лапок і пояснень."
+            f"Запит користувача: {user_prompt}\n\n"
+            "Створи короткий і точний англомовний запит "
+            "для пошуку фотографії в інтернеті. "
+            "Враховуй контекст діалогу та займенники. "
+            "Не додавай деталей, яких немає в запиті. "
+            "Якщо користувач просить кота, шукай саме домашнього кота, "
+            "а не рись, тигра чи іншу дику тварину. "
+            "Поверни тільки пошуковий запит англійською, "
+            "без пояснень та лапок."
         )
 
         response = client.chat.completions.create(
@@ -222,14 +277,14 @@ def _refine_image_query_sync(
                     "content": prompt
                 }
             ],
-            temperature=0.2
+            temperature=0.1
         )
 
         refined = (
             response.choices[0].message.content or ""
         ).strip().strip("\"'")
 
-        return refined[:300] if len(refined) >= 3 else user_prompt
+        return refined[:250] if len(refined) >= 3 else user_prompt
 
     except Exception as error:
         log_event("QUERY_REFINE_ERROR", str(error))
@@ -249,179 +304,225 @@ async def smart_refine_image_query(
 
 
 # ============================================================
-# ПОШУК ФОТОГРАФІЙ
-# БЕЗКОШТОВНІ ДЖЕРЕЛА:
-# 1. Wikimedia Commons
-# 2. Openverse
+# 5. ЗАГАЛЬНИЙ HTTP ЗАПИТ З ПОВТОРНИМИ СПРОБАМИ
+# ============================================================
+
+async def get_json_with_retry(
+    session: aiohttp.ClientSession,
+    url: str,
+    params: dict,
+    attempts: int = 3
+) -> Optional[dict]:
+
+    for attempt in range(attempts):
+
+        try:
+            async with session.get(
+                url,
+                params=params
+            ) as response:
+
+                if response.status == 429:
+                    retry_after = response.headers.get("Retry-After")
+
+                    try:
+                        delay = min(float(retry_after), 20)
+                    except (ValueError, TypeError):
+                        delay = 2 ** (attempt + 1)
+
+                    log_event(
+                        "RATE_LIMIT",
+                        f"HTTP 429. Повтор через {delay} секунд."
+                    )
+
+                    if attempt < attempts - 1:
+                        await asyncio.sleep(delay)
+
+                    continue
+
+                response.raise_for_status()
+
+                return await response.json(content_type=None)
+
+        except (
+            aiohttp.ClientError,
+            asyncio.TimeoutError
+        ) as error:
+
+            log_event("API_REQUEST_ERROR", str(error))
+
+            if attempt < attempts - 1:
+                await asyncio.sleep(2 ** attempt)
+
+    return None
+
+
+# ============================================================
+# 6. ПОШУК У WIKIMEDIA COMMONS
 # ============================================================
 
 async def search_wikimedia(
     session: aiohttp.ClientSession,
     query: str
-) -> list[dict]:
+) -> list:
 
     api_url = "https://commons.wikimedia.org/w/api.php"
 
     params = {
         "action": "query",
-        "list": "search",
-        "srnamespace": "6",
-        "srsearch": query,
-        "srlimit": "8",
+        "generator": "search",
+        "gsrsearch": query,
+        "gsrnamespace": "6",
+        "gsrlimit": "10",
+        "prop": "imageinfo",
+        "iiprop": "url|mime|size",
+        "iiurlwidth": "1400",
         "format": "json"
     }
 
-    try:
-        async with session.get(
-            api_url,
-            params=params
-        ) as response:
+    data = await get_json_with_retry(
+        session,
+        api_url,
+        params
+    )
 
-            response.raise_for_status()
-            data = await response.json(content_type=None)
-
-        candidates = []
-
-        pages = data.get("query", {}).get("search", [])
-
-        for page in pages:
-
-            title = page.get("title", "")
-
-            info_params = {
-                "action": "query",
-                "titles": title,
-                "prop": "imageinfo",
-                "iiprop": "url|mime|size",
-                "iiurlwidth": "1400",
-                "format": "json"
-            }
-
-            async with session.get(
-                api_url,
-                params=info_params
-            ) as response:
-
-                response.raise_for_status()
-                info_data = await response.json(content_type=None)
-
-            for item in info_data.get(
-                "query", {}
-            ).get("pages", {}).values():
-
-                image_info = (
-                    item.get("imageinfo") or [{}]
-                )[0]
-
-                mime = image_info.get("mime", "")
-
-                image_url = (
-                    image_info.get("thumburl")
-                    or image_info.get("url")
-                )
-
-                if (
-                    mime in {
-                        "image/jpeg",
-                        "image/png",
-                        "image/webp"
-                    }
-                    and image_url
-                ):
-                    candidates.append({
-                        "url": image_url,
-                        "title": title
-                    })
-
-        return candidates
-
-    except Exception as error:
-        log_event("WIKIMEDIA_SEARCH_ERROR", str(error))
+    if not data:
         return []
 
+    candidates = []
+
+    pages = data.get("query", {}).get("pages", {})
+
+    for page in pages.values():
+
+        title = page.get("title", "")
+
+        image_info = (
+            page.get("imageinfo") or [{}]
+        )[0]
+
+        mime = image_info.get("mime", "")
+
+        image_url = (
+            image_info.get("thumburl")
+            or image_info.get("url")
+        )
+
+        if (
+            mime in {
+                "image/jpeg",
+                "image/png",
+                "image/webp"
+            }
+            and image_url
+        ):
+
+            candidates.append({
+                "url": image_url,
+                "title": title,
+                "source": "Wikimedia Commons"
+            })
+
+    return candidates
+
+
+# ============================================================
+# 7. ПОШУК В OPENVERSE
+# ============================================================
 
 async def search_openverse(
     session: aiohttp.ClientSession,
     query: str
-) -> list[dict]:
+) -> list:
 
     api_url = "https://api.openverse.org/v1/images/"
 
     params = {
         "q": query,
-        "page_size": 8,
+        "page_size": 10,
         "mature": "false"
     }
 
-    try:
-        async with session.get(
-            api_url,
-            params=params
-        ) as response:
-
-            response.raise_for_status()
-            data = await response.json(content_type=None)
-
-        candidates = []
-
-        for item in data.get("results", []):
-
-            image_url = (
-                item.get("thumbnail")
-                or item.get("url")
-            )
-
-            if image_url and image_url.startswith("https://"):
-
-                candidates.append({
-                    "url": image_url,
-                    "title": item.get("title") or "Зображення з Openverse",
-                    "source": "Openverse"
-                })
-
-        return candidates
-
-    except Exception as error:
-        log_event("OPENVERSE_SEARCH_ERROR", str(error))
-        return []
-
-
-# ============================================================
-# ПЕРЕВІРКА СПРАВЖНОСТІ ЗОБРАЖЕННЯ
-# ============================================================
-
-def is_real_image(
-    data: bytes,
-    content_type: str
-) -> bool:
-
-    if not data:
-        return False
-
-    if len(data) < 500:
-        return False
-
-    if len(data) > MAX_IMAGE_BYTES:
-        return False
-
-    mime = content_type.split(";", 1)[0].strip().lower()
-
-    if mime not in {
-        "image/jpeg",
-        "image/png",
-        "image/webp"
-    }:
-        return False
-
-    return (
-        data.startswith(b"\xff\xd8\xff")
-        or data.startswith(b"\x89PNG\r\n\x1a\n")
-        or (
-            data.startswith(b"RIFF")
-            and data[8:12] == b"WEBP"
-        )
+    data = await get_json_with_retry(
+        session,
+        api_url,
+        params
     )
 
+    if not data:
+        return []
+
+    candidates = []
+
+    for item in data.get("results", []):
+
+        image_url = (
+            item.get("thumbnail")
+            or item.get("url")
+        )
+
+        if (
+            image_url
+            and image_url.startswith("https://")
+        ):
+
+            candidates.append({
+                "url": image_url,
+                "title": item.get("title") or "",
+                "source": "Openverse",
+                "license": item.get("license") or ""
+            })
+
+    return candidates
+
+
+# ============================================================
+# 8. ОЦІНКА ВІДПОВІДНОСТІ НАЗВИ ЗАПИТУ
+# ============================================================
+
+STOP_WORDS = {
+    "real", "photo", "picture", "image",
+    "of", "the", "a", "an", "and",
+    "find", "show", "please",
+    "знайди", "фото", "фотографію",
+    "покажи", "картинку", "надішли",
+    "мені", "будь", "ласка"
+}
+
+
+def tokenize(value: str) -> set:
+
+    words = re.findall(
+        r"[a-zа-яіїєґ0-9]+",
+        value.lower()
+    )
+
+    return {
+        word
+        for word in words
+        if len(word) > 1 and word not in STOP_WORDS
+    }
+
+
+def image_relevance(
+    query: str,
+    title: str
+) -> float:
+
+    query_words = tokenize(query)
+    title_words = tokenize(title)
+
+    if not query_words or not title_words:
+        return 0.0
+
+    common = query_words & title_words
+
+    return len(common) / len(query_words)
+
+
+# ============================================================
+# 9. ПЕРЕВІРКА ТА КОНВЕРТАЦІЯ ЗОБРАЖЕННЯ
+# ============================================================
 
 async def download_image(
     session: aiohttp.ClientSession,
@@ -437,16 +538,16 @@ async def download_image(
 
             response.raise_for_status()
 
-            content_type = response.headers.get(
-                "Content-Type", ""
+            content_type = (
+                response.headers.get("Content-Type", "")
+                .split(";", 1)[0]
+                .lower()
             )
 
-            if not content_type.lower().startswith("image/"):
+            if not content_type.startswith("image/"):
                 return None
 
-            content_length = response.headers.get(
-                "Content-Length"
-            )
+            content_length = response.headers.get("Content-Length")
 
             if (
                 content_length
@@ -454,26 +555,63 @@ async def download_image(
             ):
                 return None
 
-            data = await response.content.read(
+            raw = await response.content.read(
                 MAX_IMAGE_BYTES + 1
             )
 
-            if is_real_image(data, content_type):
-                return data
+            if len(raw) > MAX_IMAGE_BYTES:
+                return None
 
-    except Exception as error:
-        log_event("IMAGE_DOWNLOAD_ERROR", str(error))
+        # Перевіряємо справжність файлу.
+        with Image.open(BytesIO(raw)) as img:
+            img.verify()
 
-    return None
+        # Повторно відкриваємо й нормалізуємо.
+        with Image.open(BytesIO(raw)) as img:
+
+            if img.width < 100 or img.height < 100:
+                return None
+
+            img = img.convert("RGB")
+
+            img.thumbnail(
+                (MAX_IMAGE_SIDE, MAX_IMAGE_SIDE)
+            )
+
+            output = BytesIO()
+
+            img.save(
+                output,
+                format="JPEG",
+                quality=90,
+                optimize=True
+            )
+
+            return output.getvalue()
+
+    except (
+        aiohttp.ClientError,
+        asyncio.TimeoutError,
+        OSError,
+        ValueError,
+        UnidentifiedImageError
+    ) as error:
+
+        log_event(
+            "IMAGE_DOWNLOAD_ERROR",
+            f"{url}: {error}"
+        )
+
+        return None
 
 
 # ============================================================
-# ГОЛОВНА ФУНКЦІЯ ПОШУКУ ФОТО
+# 10. ГОЛОВНИЙ ПОШУК ФОТО
 # ============================================================
 
 async def find_image_from_web(
     query: str
-) -> Optional[tuple[bytes, str]]:
+) -> Optional[tuple]:
 
     headers = {
         "User-Agent": USER_AGENT
@@ -484,41 +622,78 @@ async def find_image_from_web(
         headers=headers
     ) as session:
 
+        # Спочатку Openverse, потім Wikimedia.
         sources = [
-            search_wikimedia,
-            search_openverse
+            search_openverse,
+            search_wikimedia
         ]
 
         for source in sources:
 
-            candidates = await source(session, query)
-
-            for candidate in candidates:
-
-                image_bytes = await download_image(
+            try:
+                candidates = await source(
                     session,
-                    candidate["url"]
+                    query
                 )
 
-                if image_bytes:
+                log_event(
+                    "IMAGE_CANDIDATES",
+                    f"{source.__name__}: {len(candidates)} результатів"
+                )
 
-                    title = candidate.get(
-                        "title",
-                        "Знайдене зображення"
+                # Спершу перевіряємо найрелевантніші назви.
+                candidates.sort(
+                    key=lambda item: image_relevance(
+                        query,
+                        item.get("title", "")
+                    ),
+                    reverse=True
+                )
+
+                for candidate in candidates:
+
+                    title = candidate.get("title", "")
+
+                    score = image_relevance(
+                        query,
+                        title
                     )
 
-                    log_event(
-                        "IMAGE_FOUND",
-                        f"{source.__name__}: {title}"
+                    if score < 0.25:
+                        continue
+
+                    image_bytes = await download_image(
+                        session,
+                        candidate["url"]
                     )
 
-                    return image_bytes, title
+                    if image_bytes:
+
+                        log_event(
+                            "IMAGE_FOUND",
+                            f"{source.__name__}: {title}"
+                        )
+
+                        return image_bytes, title
+
+                    # Невелика пауза між завантаженнями.
+                    await asyncio.sleep(0.3)
+
+            except Exception as error:
+
+                log_event(
+                    "IMAGE_SOURCE_ERROR",
+                    f"{source.__name__}: {error}"
+                )
+
+            # Не перевантажуємо безкоштовні API.
+            await asyncio.sleep(1)
 
     return None
 
 
 # ============================================================
-# ДОПОМІЖНІ ФУНКЦІЇ TELEGRAM
+# 11. ДОПОМІЖНІ ФУНКЦІЇ TELEGRAM
 # ============================================================
 
 def sanitize_markdown(text: str) -> str:
@@ -583,7 +758,7 @@ async def check_admin_rights(
     if username != ADMIN_USERNAME:
 
         await message.answer(
-            "⚠️ Ця технічна команда доступна лише адміністратору."
+            "Ця технічна команда доступна лише адміністратору."
         )
 
         return False
@@ -592,7 +767,7 @@ async def check_admin_rights(
 
 
 # ============================================================
-# КОМАНДА START
+# 12. КОМАНДА START
 # ============================================================
 
 @dp.message(Command("start"))
@@ -606,9 +781,9 @@ async def cmd_start(message: types.Message):
     if message.from_user.username == ADMIN_USERNAME:
 
         await message.answer(
-            "Я на зв'язку! 😉 "
-            "Тепер шукаю справжні фотографії у Wikimedia Commons "
-            "та Openverse й надсилаю їх прямо сюди."
+            "Я на зв'язку! 😉\n\n"
+            "Тепер шукаю справжні фотографії через "
+            "безкоштовні джерела Openverse та Wikimedia Commons."
         )
 
     else:
@@ -619,7 +794,7 @@ async def cmd_start(message: types.Message):
 
 
 # ============================================================
-# ОТРИМАННЯ ФОТО ВІД КОРИСТУВАЧА
+# 13. ОТРИМАННЯ ФОТО ВІД КОРИСТУВАЧА
 # ============================================================
 
 @dp.message(F.photo)
@@ -630,17 +805,19 @@ async def handle_photo_message(message: types.Message):
 
     photo = message.photo[-1]
 
-    memory = load_memory()
+    async with memory_lock:
 
-    memory["фото"].append({
-        "file_id": photo.file_id,
-        "description": message.caption or "Без підпису",
-        "sender": message.from_user.first_name
-    })
+        memory = load_memory()
 
-    memory["фото"] = memory["фото"][-50:]
+        memory["фото"].append({
+            "file_id": photo.file_id,
+            "description": message.caption or "Без підпису",
+            "sender": message.from_user.first_name
+        })
 
-    save_memory(memory)
+        memory["фото"] = memory["фото"][-50:]
+
+        save_memory(memory)
 
     await message.answer(
         "Зберегла твоє фото у свою скарбничку! 😉"
@@ -648,7 +825,7 @@ async def handle_photo_message(message: types.Message):
 
 
 # ============================================================
-# ОБРОБКА ЗАПИТУ НА ФОТО
+# 14. ОБРОБКА ЗАПИТУ НА ФОТО
 # ============================================================
 
 async def process_photo_request(
@@ -657,28 +834,30 @@ async def process_photo_request(
     user_id: int
 ):
 
-    history = user_histories.setdefault(user_id, [])
+    history = user_histories.setdefault(
+        user_id,
+        []
+    )
 
     refined_query = await smart_refine_image_query(
         user_text,
         history
     )
 
-    memory = load_memory()
-
-    image_cache = memory.get(
-        "image_cache",
-        {}
+    log_event(
+        "IMAGE_SEARCH",
+        f"Шукаю: {refined_query}"
     )
 
-    # Спочатку перевіряємо кеш Telegram.
-
-    cached_file_id = image_cache.get(refined_query)
+    # Перевірка кешу.
+    async with memory_lock:
+        memory = load_memory()
+        image_cache = memory.get("image_cache", {})
+        cached_file_id = image_cache.get(refined_query)
 
     if cached_file_id:
 
         try:
-
             await message.answer_photo(
                 photo=cached_file_id,
                 caption="Ось фото за твоїм запитом! 😉"
@@ -695,67 +874,84 @@ async def process_photo_request(
                 }
             ])
 
+            history[:] = history[-MAX_HISTORY_LENGTH * 2:]
             return
 
         except Exception as error:
 
             log_event("IMAGE_CACHE_ERROR", str(error))
 
-            image_cache.pop(refined_query, None)
-
-    # Якщо кешу немає — шукаємо в інтернеті.
-
-    try:
-
-        log_event(
-            "IMAGE_SEARCH",
-            f"Шукаю: {refined_query}"
-        )
-
-        result = await find_image_from_web(
-            refined_query
-        )
-
-        if result:
-
-            image_bytes, title = result
-
-            photo_file = BufferedInputFile(
-                image_bytes,
-                filename="missy_photo.jpg"
-            )
-
-            sent_message = await message.answer_photo(
-                photo=photo_file,
-                caption="Ось що я знайшла! 😉"
-            )
-
-            if sent_message.photo:
-
-                image_cache[refined_query] = (
-                    sent_message.photo[-1].file_id
+            async with memory_lock:
+                memory = load_memory()
+                memory.get("image_cache", {}).pop(
+                    refined_query,
+                    None
                 )
-
-                memory["image_cache"] = image_cache
-
                 save_memory(memory)
 
-            history.extend([
-                {
-                    "role": "user",
-                    "content": user_text
-                },
-                {
-                    "role": "assistant",
-                    "content": f"[Надіслано фото: {title}]"
-                }
-            ])
+    # Захист від одночасного пошуку однакового запиту.
+    lock = image_search_locks.setdefault(
+        refined_query,
+        asyncio.Lock()
+    )
 
-            return
+    async with lock:
 
-    except Exception as error:
+        try:
+            result = await find_image_from_web(
+                refined_query
+            )
 
-        log_event("PHOTO_ERROR", str(error))
+            if result:
+
+                image_bytes, title = result
+
+                photo_file = BufferedInputFile(
+                    image_bytes,
+                    filename="missy_photo.jpg"
+                )
+
+                sent_message = await message.answer_photo(
+                    photo=photo_file,
+                    caption="Ось що я знайшла! 😉"
+                )
+
+                if sent_message.photo:
+
+                    file_id = sent_message.photo[-1].file_id
+
+                    async with memory_lock:
+
+                        memory = load_memory()
+
+                        memory.setdefault(
+                            "image_cache",
+                            {}
+                        )
+
+                        memory["image_cache"][
+                            refined_query
+                        ] = file_id
+
+                        save_memory(memory)
+
+                history.extend([
+                    {
+                        "role": "user",
+                        "content": user_text
+                    },
+                    {
+                        "role": "assistant",
+                        "content": f"[Надіслано фото: {title}]"
+                    }
+                ])
+
+                history[:] = history[-MAX_HISTORY_LENGTH * 2:]
+                return
+
+        except Exception as error:
+
+            log_event("PHOTO_ERROR", str(error))
 
     await message.answer(
         "Не знайшла відповідного справжнього фото "
@@ -765,10 +961,10 @@ async def process_photo_request(
 
 
 # ============================================================
-# ГОЛОВНИЙ ОБРОБНИК ПОВІДОМЛЕНЬ
+# 15. ГОЛОВНИЙ ОБРОБНИК ПОВІДОМЛЕНЬ
 # ============================================================
 
-@dp.message(lambda message: message.text is not None)
+@dp.message(F.text)
 async def handle_text_message(message: types.Message):
 
     if not await check_general_access(message):
@@ -779,42 +975,38 @@ async def handle_text_message(message: types.Message):
     if not user_text:
         return
 
-    if (
-        user_text.startswith("/")
-        and not user_text.startswith("/start")
-    ):
+    if user_text.startswith("/") and user_text != "/start":
 
         if not await check_admin_rights(message):
             return
 
     text_lower = user_text.lower()
-
     user_id = message.from_user.id
-
-    memory = load_memory()
-
-    # Збереження фактів у пам'ять.
-
-    if (
-        "запам'ятай" in text_lower
-        or "запамятай" in text_lower
-    ):
-
-        memory["факти"].append(
-            f"[{message.from_user.first_name}]: {user_text}"
-        )
-
-        memory["факти"] = memory["факти"][-200:]
-
-        save_memory(memory)
 
     history = user_histories.setdefault(
         user_id,
         []
     )
 
-    # Розпізнавання запитів на фото.
+    # Збереження фактів.
+    if (
+        "запам'ятай" in text_lower
+        or "запамятай" in text_lower
+    ):
 
+        async with memory_lock:
+
+            memory = load_memory()
+
+            memory["факти"].append(
+                f"[{message.from_user.first_name}]: {user_text}"
+            )
+
+            memory["факти"] = memory["факти"][-200:]
+
+            save_memory(memory)
+
+    # Розпізнавання запитів на фото.
     action_words = (
         "надішли",
         "надіслати",
@@ -853,8 +1045,7 @@ async def handle_text_message(message: types.Message):
 
     is_photo_request = has_action and has_image
 
-    # Розпізнавання продовження запиту через займенники.
-
+    # Підтримка продовження розмови через займенники.
     pronoun_request = any(
         word in text_lower
         for word in (
@@ -862,7 +1053,9 @@ async def handle_text_message(message: types.Message):
             "його",
             "цього",
             "цю",
-            "цей"
+            "цей",
+            "нього",
+            "неї"
         )
     )
 
@@ -879,7 +1072,6 @@ async def handle_text_message(message: types.Message):
         and pronoun_request
         and previous_context_has_image
     ):
-
         is_photo_request = True
 
     if is_photo_request:
@@ -892,16 +1084,15 @@ async def handle_text_message(message: types.Message):
 
         return
 
-    # Звичайне повідомлення.
-
-    skip_words = [
+    # Звичайна розмова.
+    skip_words = (
         "привіт",
         "як справи",
         "що робиш",
         "добридень",
         "бувай",
         "дякую"
-    ]
+    )
 
     is_greeting = (
         any(word in text_lower for word in skip_words)
@@ -927,19 +1118,24 @@ async def handle_text_message(message: types.Message):
 
         await message.answer(
             "Для роботи мовної моделі потрібен GROQ_API_KEY. "
-            "Додай ключ у змінні середовища хостингу."
+            "Перевір змінні середовища на хостингу."
         )
 
         return
+
+    async with memory_lock:
+        memory = load_memory()
 
     system_prompt = (
         "Ти — Міссі (Міссі Блек), "
         "персональна україномовна асистентка Віталя. "
         "Спілкуйся тепло, дружньо, неформально та природно. "
         "Враховуй контекст попередніх повідомлень. "
+        "Не вигадуй факти, якщо інформації недостатньо. "
         "Ніколи не показуй користувачам технічні file_id "
         "або секретні ключі. "
-        "Не вигадуй факти, якщо інформації недостатньо. "
+        "Завжди відповідай українською, якщо користувач "
+        "не попросив іншу мову. "
         f"База пам'яті: {json.dumps(memory, ensure_ascii=False)}"
         f"{search_context}"
     )
@@ -968,7 +1164,7 @@ async def handle_text_message(message: types.Message):
                 client.chat.completions.create,
                 model="openai/gpt-oss-20b",
                 messages=messages_payload,
-                temperature=0.9
+                temperature=0.8
             )
 
             reply_text = (
@@ -989,7 +1185,8 @@ async def handle_text_message(message: types.Message):
                     "Спробуй повторити запит трохи пізніше."
                 )
 
-            await asyncio.sleep(1)
+            else:
+                await asyncio.sleep(1)
 
     reply_text = sanitize_markdown(reply_text)
 
@@ -1007,7 +1204,7 @@ async def handle_text_message(message: types.Message):
 
 
 # ============================================================
-# ВЕБСЕРВЕР ДЛЯ ХОСТИНГУ
+# 16. ВЕБСЕРВЕР ДЛЯ RENDER
 # ============================================================
 
 async def handle_ping(request):
@@ -1051,29 +1248,55 @@ async def start_web_server():
 
 
 # ============================================================
-# ЗАПУСК МІССІ
+# 17. ЗАПУСК БОТА
 # ============================================================
 
 async def main():
 
-    await bot.delete_webhook(
-        drop_pending_updates=True
-    )
-
-    web_runner = await start_web_server()
-
-    log_event(
-        "BOT",
-        "МІССІ ЗАПУЩЕНА"
-    )
+    web_runner = None
 
     try:
 
-        await dp.start_polling(bot)
+        # Видаляємо webhook перед запуском polling.
+        await bot.delete_webhook(
+            drop_pending_updates=True
+        )
+
+        web_runner = await start_web_server()
+
+        log_event(
+            "BOT",
+            "МІССІ ЗАПУЩЕНА"
+        )
+
+        await dp.start_polling(
+            bot,
+            handle_signals=False
+        )
+
+    except TelegramConflictError:
+
+        log_event(
+            "TELEGRAM_CONFLICT",
+            "Інший процес уже використовує цей токен. "
+            "Зупини зайвий екземпляр бота."
+        )
+
+        raise
+
+    except TelegramNetworkError as error:
+
+        log_event(
+            "TELEGRAM_NETWORK_ERROR",
+            str(error)
+        )
+
+        raise
 
     finally:
 
-        await web_runner.cleanup()
+        if web_runner:
+            await web_runner.cleanup()
 
         await bot.session.close()
 
