@@ -21,6 +21,7 @@ from groq import Groq
 from ddgs import DDGS
 from drive_memory import DriveMemory, MemoryUnavailable, RevisionConflict
 from photo_archive import archive_image, retrieve_image, retrieve_identity, MAX_ARCHIVE_BYTES
+from local_image_edit import edit_image, parse_edit, EditError
 
 # Render Environment Variables
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -60,6 +61,7 @@ histories = {}
 memory_lock = asyncio.Lock()
 user_locks = {}
 user_modes = {}
+image_edit_lock = asyncio.Semaphore(1)
 conversation_versions = {}
 DRIVE_MEMORY_URL = os.getenv("DRIVE_MEMORY_URL", "")
 DRIVE_MEMORY_SECRET = os.getenv("DRIVE_MEMORY_SECRET", "")
@@ -1154,6 +1156,83 @@ async def status_command(message: types.Message):
     await message.answer(f"Бот працює.\nПам'ять: {memory_status}.\nПеревірка фото: {vision}.\nВебпошук: кілька пошукових джерел; доступність перевіряється під час запиту.")
 
 
+EDIT_HELP = (
+    "Відповідай на фото або зображення-файл командою:\n"
+    "/edit світліше\n/edit темніше\n/edit тепліше\n/edit контраст 1.2\n"
+    "/edit обрізати 1:1\n/edit напис Привіт, Україно!\n\n"
+    "Для образу Катрусі: /edit себе світліше\n"
+    "Для архіву: /edit КОД_ФОТО тепліше\n"
+    "Правки застосовуються по одній; можна відповісти наступною командою на результат. Оригінал зберігається окремо."
+)
+
+
+@dp.message(Command("edit"))
+async def edit_command(message: types.Message):
+    if not await check_access(message):
+        return
+    arguments=message.text.partition(" ")[2].strip()
+    if not arguments:
+        await message.answer(EDIT_HELP)
+        return
+    source,_,rest=arguments.partition(" ")
+    own_image=source.lower()=="себе"
+    from_archive=bool(re.fullmatch(r"[a-f0-9]{24}",source))
+    specification=rest.strip() if own_image or from_archive else arguments
+    try:
+        parse_edit(specification)
+    except EditError as exc:
+        await message.answer(str(exc))
+        return
+    reply=message.reply_to_message
+    if not own_image and not from_archive and not (reply and (reply.document or reply.photo)):
+        await message.answer("Вибери фото через «Відповісти» або скористайся /edit себе світліше.\n\n"+EDIT_HELP)
+        return
+    try:
+        if own_image or from_archive:
+            if not drive_store:
+                await message.answer("Для цього джерела потрібне підключення Google Drive.")
+                return
+            if own_image:
+                data,_,_=await retrieve_identity(drive_store)
+            else:
+                data,_,_=await retrieve_image(drive_store,message.from_user.id,source)
+        else:
+            media=reply.document or reply.photo[-1]
+            if media.file_size and media.file_size>MAX_ARCHIVE_BYTES:
+                await message.answer("Для редагування надішли зображення до 8 МіБ.")
+                return
+            destination=BytesIO()
+            await message.bot.download(media,destination=destination,timeout=40)
+            data=destination.getvalue()
+        async with image_edit_lock:
+            result,ext,resized=await asyncio.to_thread(edit_image,data,specification)
+        archive_id=None
+        unchanged=result==data
+        if drive_store and not unchanged:
+            try:
+                archive_id=await archive_image(
+                    drive_store,result,message.from_user.id,"edited."+ext,
+                    "Редагована копія: "+specification[:170],False,message.date.isoformat(),
+                )
+            except Exception as exc:
+                event("EDIT_ARCHIVE_ERROR",str(exc) if isinstance(exc,MemoryUnavailable) else type(exc).__name__)
+        caption="Відредагована копія. Оригінал і основний образ не змінено."
+        if resized:caption+=" Для обробки довшу сторону зменшено до 3072 пікселів."
+        if unchanged:
+            caption+="\nОбрана правка не змінила байти зображення; повторний запис в архів не потрібний."
+        elif archive_id:
+            caption+="\nЗбережено в архіві: /photo "+archive_id
+        elif drive_store:
+            caption+="\nКопію не вдалося записати в Drive; файл надсилаю тут."
+        await message.answer_document(BufferedInputFile(result,filename="edited."+ext),caption=caption)
+        event("LOCAL_IMAGE_EDIT","completed without AI API requests")
+    except EditError as exc:
+        await message.answer(str(exc))
+    except Exception as exc:
+        event("LOCAL_IMAGE_EDIT_ERROR",str(exc) if isinstance(exc,MemoryUnavailable) else type(exc).__name__)
+        await message.answer("Не вдалося отримати або обробити зображення. Перевір джерело й спробуй ще раз. Оригінал не змінювався.")
+
+
 @dp.message(Command("setself"))
 async def set_identity_command(message: types.Message):
     if not await check_access(message):
@@ -1316,7 +1395,7 @@ async def handle_text(message: types.Message):
     text = message.text.strip()
 
     if text.startswith("/"):
-        await message.answer("Невідома команда. Доступні /start, /status, /photos і /photo.")
+        await message.answer("Невідома команда. Доступні /start, /status, /photos, /photo та /edit.")
         return
 
     uid = message.from_user.id
