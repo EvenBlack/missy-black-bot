@@ -33,8 +33,10 @@ MEMORY_FILE = Path("missy_memory.json")
 MAX_HISTORY = 15
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 IMAGE_SEARCH_TIMEOUT = 55
-MAX_VISION_CANDIDATES = 2
+MAX_VISION_CANDIDATES = 5
 VISION_TIMEOUT = aiohttp.ClientTimeout(total=18, connect=5, sock_read=14)
+IMAGE_DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=25, connect=5, sock_read=18)
+OPENVERSE_TIMEOUT = aiohttp.ClientTimeout(total=18, connect=5, sock_read=14)
 USER_AGENT = "MissyTelegramBot/2.0 (image search)"
 TIMEOUT = aiohttp.ClientTimeout(total=8, connect=3, sock_read=6)
 
@@ -231,7 +233,6 @@ def fallback_english_query(text):
         elif re.fullmatch(r"[a-z0-9]+", word):
             translated.append(word)
 
-    # Прибираємо дублікати зі збереженням порядку.
     translated = list(dict.fromkeys(translated))
     return " ".join(translated[:8])
 
@@ -333,8 +334,13 @@ def score_result(query, title, tags=None):
     )
 
 
-async def request_json(session, url, params=None, headers=None):
-    async with session.get(url, params=params, headers=headers) as response:
+async def request_json(session, url, params=None, headers=None, timeout=None):
+    async with session.get(
+        url,
+        params=params,
+        headers=headers,
+        timeout=timeout,
+    ) as response:
         if response.status == 429:
             raise RuntimeError(
                 f"HTTP 429 (Retry-After={response.headers.get('Retry-After', '?')})"
@@ -356,7 +362,11 @@ async def openverse_auth(session):
         "client_secret": OPENVERSE_CLIENT_SECRET,
     }
 
-    async with session.post(url, data=form) as response:
+    async with session.post(
+        url,
+        data=form,
+        timeout=OPENVERSE_TIMEOUT,
+    ) as response:
         if response.status >= 400:
             raise RuntimeError(
                 f"Openverse auth HTTP {response.status}: "
@@ -380,6 +390,7 @@ async def search_openverse(session, query):
             "https://api.openverse.org/v1/images/",
             {"q": query, "page_size": 12},
             headers,
+            timeout=OPENVERSE_TIMEOUT,
         )
 
         results = payload.get("results", [])
@@ -411,7 +422,7 @@ async def search_openverse(session, query):
                     "title": item.get("title") or query,
                     "source": "Openverse",
                 })
-                if len(candidates) >= 2:
+                if len(candidates) >= 3:
                     break
 
         event(
@@ -434,7 +445,7 @@ async def search_wikimedia(session, query):
         "generator": "search",
         "gsrsearch": f"filetype:bitmap {query}",
         "gsrnamespace": 6,
-        "gsrlimit": 12,
+        "gsrlimit": 20,
         "prop": "imageinfo",
         "iiprop": "url",
         "iiurlwidth": 1200,
@@ -482,7 +493,7 @@ async def search_wikimedia(session, query):
                 "title": title,
                 "source": "Wikimedia Commons",
             }
-            for points, title, url in ranked[:2]
+            for points, title, url in ranked[:8]
         ]
 
         event(
@@ -498,9 +509,13 @@ async def search_wikimedia(session, query):
 
 async def download_image(session, candidate):
     try:
+        chunks = []
+        total_size = 0
+
         async with session.get(
             candidate["url"],
             headers={"User-Agent": USER_AGENT},
+            timeout=IMAGE_DOWNLOAD_TIMEOUT,
         ) as response:
             if response.status != 200:
                 raise RuntimeError(
@@ -513,14 +528,32 @@ async def download_image(session, candidate):
                     f"not an image content-type: {content_type}"
                 )
 
-            data = await response.content.read(MAX_IMAGE_BYTES + 1)
+            content_length = response.headers.get("Content-Length")
+            if content_length:
+                try:
+                    if int(content_length) > MAX_IMAGE_BYTES:
+                        raise RuntimeError("image larger than 8 MB")
+                except ValueError:
+                    pass
 
-        if not data or len(data) > MAX_IMAGE_BYTES:
-            raise RuntimeError("image empty or larger than 8 MB")
+            async for chunk in response.content.iter_chunked(64 * 1024):
+                total_size += len(chunk)
 
+                if total_size > MAX_IMAGE_BYTES:
+                    raise RuntimeError("image larger than 8 MB")
+
+                chunks.append(chunk)
+
+        data = b"".join(chunks)
+
+        if not data:
+            raise RuntimeError("image download returned an empty file")
+
+        # Спершу перевіряємо структуру файлу.
         with Image.open(BytesIO(data)) as img:
             img.verify()
 
+        # Потім відкриваємо його повторно й примусово декодуємо всі дані.
         with Image.open(BytesIO(data)) as img:
             if (
                 img.format not in {"JPEG", "PNG", "WEBP"}
@@ -529,20 +562,32 @@ async def download_image(session, candidate):
             ):
                 raise RuntimeError("unsupported or too-small image")
 
+            img.load()
+
             ext = {
                 "JPEG": "jpg",
                 "PNG": "png",
                 "WEBP": "webp",
             }[img.format]
 
+        event(
+            "IMAGE_DOWNLOAD_SUCCESS",
+            f"{candidate['source']}; bytes={len(data)}; "
+            f"title={candidate['title'][:100]!r}",
+        )
         return data, ext
 
     except (UnidentifiedImageError, OSError, ValueError, RuntimeError) as exc:
-        event("IMAGE_REJECTED", str(exc))
+        event(
+            "IMAGE_REJECTED",
+            f"{candidate.get('source', 'unknown')}; "
+            f"{candidate.get('title', '')[:100]!r}; {exc}",
+        )
     except Exception as exc:
         event(
             "IMAGE_DOWNLOAD_ERROR",
-            f"{type(exc).__name__}: {exc}",
+            f"{type(exc).__name__}: {exc}; "
+            f"title={candidate.get('title', '')[:100]!r}",
         )
 
     return None
