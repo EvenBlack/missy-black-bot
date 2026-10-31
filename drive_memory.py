@@ -66,7 +66,9 @@ class DriveMemory:
         if not isinstance(result, dict) or result.get('ok') is not True:
             if isinstance(result, dict) and result.get('error') == 'REVISION_CONFLICT':
                 raise RevisionConflict('REVISION_CONFLICT')
-            raise MemoryUnavailable('MEMORY_REQUEST_REJECTED')
+            safe_errors = {'UNAUTHORIZED', 'SETUP_REQUIRED', 'STORAGE_ERROR', 'POST_REQUIRED', 'BUSY', 'INVALID_ACTION', 'INVALID_DATA', 'MEMORY_TOO_LARGE', 'INVALID_REQUEST'}
+            code = result.get('error') if isinstance(result, dict) else None
+            raise MemoryUnavailable('MEMORY_' + code if isinstance(code, str) and code in safe_errors else 'MEMORY_REQUEST_REJECTED')
         revision = result.get('revision')
         if type(revision) is not int or revision < 0:
             raise MemoryUnavailable('INVALID_MEMORY_REVISION')
