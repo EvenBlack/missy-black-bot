@@ -87,7 +87,7 @@ def web_search(query: str, max_results=3) -> str:
         pass
     return f"Запит: '{query}'. (Контекст оновлено)."
 
-# --- ІНТЕЛЕКТУАЛЬНИЙ ШІ-УТОЧНЮВАЧ ЗАПИТІВ З УРАХУВАННЯМ КОНТЕКСТУ ---
+# --- ІНТЕЛЕКТУАЛЬНИЙ ШІ-УТОЧНЮВАЧ ЗАПИТУ З УРАХУВАННЯМ КОНТЕКСТУ ---
 
 def smart_refine_image_query(user_prompt: str, history_list: list) -> str:
     try:
@@ -95,10 +95,10 @@ def smart_refine_image_query(user_prompt: str, history_list: list) -> str:
         refine_prompt = (
             f"Історія діалогу:\n{context_str}\n\n"
             f"Запит користувача на фото: '{user_prompt}'\n"
-            "Завдання: Зрозумій, який саме об'єкт, будівлю, людину чи річ хоче побачити користувач, враховуючи контекст розмови (наприклад, займенники 'її', 'його' після обговорення конкретного об'єкта). "
-            "Усувай омоніми (наприклад, 'Пентагон' — це будівля Міністерства оборони США у Вашингтоні, а не плата; 'Perseverance' — марсоход НАСА). "
-            "Створи точний англомовний пошуковий запит для якісного фото. "
-            "Поверни ВИКЛЮЧНО англійський рядок (наприклад: 'NASA Perseverance rover on Mars high resolution photo'). Жодних лапок чи зайвих слів."
+            "Завдання: Зрозумій, який саме об'єкт, будівлю, людину чи річ хоче побачити користувач, враховуючи контекст розмови (наприклад, займенники 'її', 'його' після обговорення конкретного об'єкта, як-от Колізей). "
+            "Усувай омоніми (наприклад, 'Пентагон' — це будівля Міністерства оборони США у Вашингтоні; 'Perseverance' — марсоход НАСА). "
+            "Створи точний англомовний пошуковий рядок для знаходження реального фото високої якості у відкритих базах (наприклад: 'Colosseum Rome night illumination', 'NASA Perseverance rover Mars', 'Pentagon building Washington'). "
+            "Поверни ВИКЛЮЧНО англійський рядок пошуку. Жодних лапок, пояснень чи зайвих слів."
         )
         response = client.chat.completions.create(
             model="openai/gpt-oss-20b",
@@ -113,63 +113,56 @@ def smart_refine_image_query(user_prompt: str, history_list: list) -> str:
         log_event("REFINE_ERR", str(e))
     return user_prompt
 
-# --- БАГАТОРІВНЕВИЙ НЕПОТОПЛЮВАНИЙ МЕДІА-КАСКАД (8 РІВНІВ) ---
-
-def media_tier_1_wikimedia(query: str) -> str:
-    search_api = f"https://commons.wikimedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'generator': 'search', 'gsrsearch': query, 'gsrnamespace': '6', 'gsrlimit': '3', 'prop': 'imageinfo', 'iiprop': 'url', 'format': 'json'})}"
-    req = urllib.request.Request(search_api, headers={'User-Agent': 'Mozilla/5.0'})
-    with urllib.request.urlopen(req, timeout=4) as resp:
-        data = json.loads(resp.read().decode('utf-8'))
-        pages = data.get('query', {}).get('pages', {})
-        for _, page_info in pages.items():
-            imageinfo = page_info.get('imageinfo', [])
-            if imageinfo and imageinfo[0].get('url'):
-                url = imageinfo[0].get('url')
-                if any(ext in url.lower() for ext in ['.jpg', '.jpeg', '.png', '.svg']):
-                    return url
-    return None
-
-def media_tier_2_wikipedia(query: str) -> str:
-    wiki_url = f"https://uk.wikipedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'list': 'search', 'srsearch': query, 'format': 'json'})}"
-    req_w = urllib.request.Request(wiki_url, headers={'User-Agent': 'Mozilla/5.0'})
-    with urllib.request.urlopen(req_w, timeout=4) as resp_w:
-        w_data = json.loads(resp_w.read().decode('utf-8'))
-        items = w_data.get('query', {}).get('search', [])
-        if items:
-            title = items[0]['title']
-            p_url = f"https://uk.wikipedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'prop': 'pageimages', 'piprop': 'original', 'titles': title, 'format': 'json'})}"
-            req_p = urllib.request.Request(p_url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req_p, timeout=4) as resp_p:
-                p_data = json.loads(resp_p.read().decode('utf-8'))
-                pages = p_data.get('query', {}).get('pages', {})
-                for _, pinfo in pages.items():
-                    if 'original' in pinfo and pinfo['original'].get('source'):
-                        return pinfo['original']['source']
-    return None
-
-def media_tier_3_pollinations(query: str) -> str:
-    encoded = urllib.parse.quote(query)
-    return f"https://image.pollinations.ai/prompt/{encoded}?width=1200&height=800&nologo=true"
-
-def media_tier_4_picsum(query: str) -> str:
-    query_seed = abs(hash(query.lower())) % 10000
-    return f"https://picsum.photos/seed/{query_seed}/1200/800"
+# --- ПОТУЖНИЙ МЕДІА-КАСКАД НА БАЗІ WIKIMEDIA ТА ВІДКРИТИХ СТАТЕЙ ---
 
 def find_image_url_from_web(query: str) -> str:
     clean_query = query.strip()
-    log_event("MEDIA_CASCADE", f"Запуск багаторівневого каскаду для: '{clean_query}'")
+    log_event("MEDIA_CASCADE", f"Пошук фото для: '{clean_query}'")
 
-    for tier_func in [media_tier_1_wikimedia, media_tier_2_wikipedia, media_tier_3_pollinations, media_tier_4_picsum]:
-        try:
-            res_url = tier_func(clean_query)
-            if res_url and res_url.startswith("http"):
-                log_event("CASCADE_SUCCESS", f"Знайдено успішно через {tier_func.__name__}: {res_url}")
-                return res_url
-        except Exception as e:
-            log_event("TIER_ERR", str(e))
-            continue
+    # Рівень 1: Wikimedia Commons API
+    try:
+        search_api = f"https://commons.wikimedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'generator': 'search', 'gsrsearch': clean_query, 'gsrnamespace': '6', 'gsrlimit': '5', 'prop': 'imageinfo', 'iiprop': 'url', 'format': 'json'})}"
+        req = urllib.request.Request(search_api, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            pages = data.get('query', {}).get('pages', {})
+            for _, page_info in pages.items():
+                imageinfo = page_info.get('imageinfo', [])
+                if imageinfo and imageinfo[0].get('url'):
+                    url = imageinfo[0].get('url')
+                    if any(ext in url.lower() for ext in ['.jpg', '.jpeg', '.png', '.svg']):
+                        log_event("MEDIA_SUCCESS", f"Знайдено у Wikimedia: {url}")
+                        return url
+    except Exception as e:
+        log_event("COMMONS_ERR", str(e))
 
-    return f"https://picsum.photos/seed/123/1200/800"
+    # Рівень 2: Wikipedia Article Main Image API
+    try:
+        wiki_url = f"https://uk.wikipedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'list': 'search', 'srsearch': clean_query, 'format': 'json'})}"
+        req_w = urllib.request.Request(wiki_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req_w, timeout=5) as resp_w:
+            w_data = json.loads(resp_w.read().decode('utf-8'))
+            items = w_data.get('query', {}).get('search', [])
+            if items:
+                title = items[0]['title']
+                p_url = f"https://uk.wikipedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'prop': 'pageimages', 'piprop': 'original', 'titles': title, 'format': 'json'})}"
+                req_p = urllib.request.Request(p_url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req_p, timeout=5) as resp_p:
+                    p_data = json.loads(resp_p.read().decode('utf-8'))
+                    pages = p_data.get('query', {}).get('pages', {})
+                    for _, pinfo in pages.items():
+                        if 'original' in pinfo and pinfo['original'].get('source'):
+                            src = pinfo['original']['source']
+                            log_event("MEDIA_SUCCESS", f"Знайдено у Вікіпедії: {src}")
+                            return src
+    except Exception as e:
+        log_event("WIKI_ERR", str(e))
+
+    # Рівень 3: Залізобетонний резерв за хешем запиту (Picsum)
+    query_seed = abs(hash(clean_query.lower())) % 10000
+    fallback = f"https://picsum.photos/seed/{query_seed}/1200/800"
+    log_event("MEDIA_FALLBACK", f"Використовую резерв: {fallback}")
+    return fallback
 
 def sanitize_markdown(text: str) -> str:
     if text.count('*') % 2 != 0:
@@ -208,7 +201,7 @@ async def cmd_start(message: types.Message):
         return
     user_histories[message.from_user.id] = []
     if message.from_user.username == ADMIN_USERNAME:
-        await message.answer("Віталю, я на зв'язку! Повний багаторівневий каскад та ШІ-контекст активовано! 😉")
+        await message.answer("Віталю, я на зв'язку! Надійний медіа-каскад без помилок і таймаутів активовано! 😉")
     else:
         await message.answer("Привіт, Михайле! Я Міссі — персональна асистентка Віталя.")
 
@@ -232,7 +225,7 @@ async def handle_photo_message(message: types.Message):
     save_memory(memory)
     await message.answer("Зберегла твоє фото у свою скарбничку! 😉")
 
-# --- ГОЛОВНИЙ ОБРОБНИК ЗІ ШІ-КОНТЕКСТОМ ТА КАСКАДОМ ---
+# --- ГОЛОВНИЙ ОБРОБНИК ЗІ ШІ-КОНТЕКСТОМ ТА СТАБІЛЬНИМ ПОШУКОМ ---
 
 @dp.message(lambda message: message.text is not None)
 async def handle_text_message(message: types.Message):
@@ -276,7 +269,7 @@ async def handle_text_message(message: types.Message):
                 pass
 
         try:
-            log_event("MEDIA_PROCESS", f"Запускаю каскад завантаження для: '{refined_query}'")
+            log_event("MEDIA_PROCESS", f"Шукаю фото за уточненням: '{refined_query}'")
             img_url = find_image_url_from_web(refined_query)
             if img_url:
                 req = urllib.request.Request(img_url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -350,7 +343,7 @@ async def handle_text_message(message: types.Message):
     await send_long_message(message, reply_text)
 
 async def handle_ping(request):
-    return web.Response(text="Missy is alive 24/7 with media cascade!")
+    return web.Response(text="Missy is alive 24/7 with stable media cascade!")
 
 async def start_web_server():
     app = web.Application()
@@ -364,13 +357,13 @@ async def start_web_server():
     log_event("WEB_SERVER", f"Вебсервер запущено на порту {port}")
 
 async def main():
-    # Повне скидання старих сесій для запобігання TelegramConflictError
+    # Повне скидання старих підключень для усунення TelegramConflictError
     tmp_bot = Bot(token=TELEGRAM_TOKEN)
     await tmp_bot.delete_webhook(drop_pending_updates=True)
     await tmp_bot.session.close()
     
     await start_web_server()
-    log_event("BOT", "МІССІ ЗАПУЩЕНА З КАСКАДОМ ТА АНТИКОНФЛІКТОМ...")
+    log_event("BOT", "МІССІ ЗАПУЩЕНА ЗІ СТАБІЛЬНИМ МЕДІА-КАСКАДОМ...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
