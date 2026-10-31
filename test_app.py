@@ -13,6 +13,23 @@ os.environ['GROQ_API_KEY'] = 'test-key-not-real'
 import app
 
 class CoreTests(unittest.TestCase):
+    def test_all_real_search_transport_profiles_construct(self):
+        # Integration regression: mocks previously hid incompatible primp versions.
+        import primp
+        from ddgs.http_client import HttpClient
+        for profile in HttpClient._impersonates:
+            with self.subTest(profile=profile):
+                primp.Client(impersonate=profile)
+
+    def test_query_removes_conversation_instructions(self):
+        self.assertEqual(app.prepare_web_query('Міссі, знайди останні новини України та дай посилання на джерела'), 'останні новини України')
+
+    def test_news_feed_keeps_date_publisher_and_link(self):
+        result = app.parse_news_feed(b'<rss><channel><item><title>News</title><link>https://news.google.com/rss/articles/example</link><pubDate>Sat, 31 Oct 2026 20:00:00 GMT</pubDate><source>Publisher</source></item></channel></rss>')
+        self.assertIn('Publisher', result)
+        self.assertIn('31 Oct 2026', result)
+        self.assertIn('https://news.google.com/', result)
+
     def test_html_result_nested_snippet_and_redirect(self):
         parser = app.SearchResultsParser()
         parser.feed('<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fpython.org%2F">Python</a><div class="result__snippet">Official <b>Python</b> docs</div>')
@@ -74,6 +91,12 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
         self.search_client = patcher.start()
         self.search_client.return_value.text.return_value = []
         self.addCleanup(patcher.stop)
+
+    async def test_news_route_precedes_generic_search(self):
+        with patch.object(app, 'news_search', AsyncMock(return_value='dated headlines')) as news:
+            self.assertEqual(await app.web_search('Міссі, знайди новини України'), 'dated headlines')
+            news.assert_awaited_once_with('новини України')
+            self.search_client.assert_not_called()
 
     async def test_metasearch_source_link(self):
         self.search_client.return_value.text.return_value = [
