@@ -72,155 +72,6 @@ class DDGLiteParser(HTMLParser):
         if self.in_result:
             self.current_text += data
 
-# --- 11-РІВНЕВИЙ КАСКАДНИЙ ПОШУК ТЕКСТУ ---
-
-def eleventh_web_search(query: str, max_results=3) -> str:
-    try:
-        url = f"https://duckduckgo.com/html/?{urllib.parse.urlencode({'q': query})}"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            html_content = response.read().decode('utf-8', errors='ignore')
-            parser = DDGLiteParser()
-            parser.feed(html_content)
-            snippets = parser.results[:max_results]
-            if snippets:
-                return "\n".join(snippets)
-    except Exception:
-        pass
-    return f"Запит: '{query}'. (Контекст оновлено)."
-
-def tenth_web_search(query: str, max_results=3) -> str:
-    try:
-        url = f"https://html.duckduckgo.com/html/?{urllib.parse.urlencode({'q': query, 's': '0'})}"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            html_content = response.read().decode('utf-8', errors='ignore')
-            parser = DDGLiteParser()
-            parser.feed(html_content)
-            if parser.results:
-                return "\n".join(parser.results[:max_results])
-    except Exception:
-        pass
-    return eleventh_web_search(query, max_results)
-
-def ninth_web_search(query: str, max_results=3) -> str:
-    try:
-        url = "https://html.duckduckgo.com/html/"
-        data = urllib.parse.urlencode({'q': query}).encode('utf-8')
-        req = urllib.request.Request(url, data=data, headers={'User-Agent': 'Mozilla/5.0 (iPhone)'})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            html_content = response.read().decode('utf-8', errors='ignore')
-            parser = DDGLiteParser()
-            parser.feed(html_content)
-            if parser.results:
-                return "\n".join(parser.results[:max_results])
-    except Exception:
-        pass
-    return tenth_web_search(query, max_results)
-
-def eighth_web_search(query: str, max_results=3) -> str:
-    try:
-        url = f"https://news.google.com/rss/search?{urllib.parse.urlencode({'q': query, 'hl': 'uk', 'gl': 'UA'})}"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            xml_content = response.read().decode('utf-8', errors='ignore')
-            import re
-            titles = re.findall(r'<title>(.*?)</title>', xml_content)
-            clean = [t.replace('<![CDATA[', '').replace(']]>', '') for t in titles if t and 'Google' not in t][:max_results]
-            if clean:
-                return "\n".join(clean)
-    except Exception:
-        pass
-    return ninth_web_search(query, max_results)
-
-def seventh_web_search(query: str, max_results=3) -> str:
-    try:
-        url = f"https://uk.wikipedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'list': 'search', 'srsearch': query, 'format': 'json'})}"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            data = json.loads(response.read().decode('utf-8'))
-            items = data.get('query', {}).get('search', [])
-            snippets = [i.get('snippet', '').replace('<span class="searchmatch">', '').replace('</span>', '') for i in items[:max_results]]
-            if snippets:
-                return "\n".join(snippets)
-    except Exception:
-        pass
-    return eighth_web_search(query, max_results)
-
-def sixth_web_search(query: str, max_results=3) -> str:
-    try:
-        url = "https://lite.duckduckgo.com/lite/"
-        data = urllib.parse.urlencode({'q': query}).encode('utf-8')
-        req = urllib.request.Request(url, data=data, headers={'User-Agent': 'Opera/9.80'})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            html_content = response.read().decode('utf-8', errors='ignore')
-            parser = DDGLiteParser()
-            parser.feed(html_content)
-            if parser.results:
-                return "\n".join(parser.results[:max_results])
-    except Exception:
-        pass
-    return seventh_web_search(query, max_results)
-
-def fifth_web_search(query: str, max_results=3) -> str:
-    try:
-        url = f"https://lite.qwant.com/?{urllib.parse.urlencode({'q': query, 't': 'web'})}"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            html_content = response.read().decode('utf-8', errors='ignore')
-            if query.lower() in html_content.lower():
-                return f"Знайдено згадки за запитом '{query}' у мережі."
-    except Exception:
-        pass
-    return sixth_web_search(query, max_results)
-
-def fourth_web_search(query: str, max_results=3) -> str:
-    try:
-        url = f"https://api.duckduckgo.com/?{urllib.parse.urlencode({'q': query, 'format': 'json', 'no_redirect': '1', 'no_html': '1'})}"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            data = json.loads(response.read().decode('utf-8'))
-            abstract = data.get('AbstractText', '')
-            if abstract:
-                return abstract
-            related = data.get('RelatedTopics', [])
-            snippets = [r.get('Text', '') for r in related if 'Text' in r]
-            if snippets:
-                return "\n".join(snippets[:max_results])
-    except Exception:
-        pass
-    return fifth_web_search(query, max_results)
-
-def tertiary_web_search(query: str, max_results=3) -> str:
-    try:
-        url = "https://html.duckduckgo.com/html/"
-        data = urllib.parse.urlencode({'q': query}).encode('utf-8')
-        req = urllib.request.Request(url, data=data, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            html_content = response.read().decode('utf-8', errors='ignore')
-            parser = DDGLiteParser()
-            parser.feed(html_content)
-            if parser.results:
-                return "\n".join(parser.results[:max_results])
-    except Exception:
-        pass
-    return fourth_web_search(query, max_results)
-
-def fallback_web_search(query: str, max_results=3) -> str:
-    try:
-        url = "https://lite.duckduckgo.com/lite/"
-        data = urllib.parse.urlencode({'q': query, 's': '0'}).encode('utf-8')
-        req = urllib.request.Request(url, data=data, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            html_content = response.read().decode('utf-8', errors='ignore')
-            parser = DDGLiteParser()
-            parser.feed(html_content)
-            if parser.results:
-                return "\n".join(parser.results[:max_results])
-    except Exception:
-        pass
-    return tertiary_web_search(query, max_results)
-
 def web_search(query: str, max_results=3) -> str:
     try:
         url = "https://lite.duckduckgo.com/lite/"
@@ -234,13 +85,17 @@ def web_search(query: str, max_results=3) -> str:
                 return "\n".join(parser.results[:max_results])
     except Exception:
         pass
-    return fallback_web_search(query, max_results)
+    return f"Запит: '{query}'. (Контекст оновлено)."
 
-# --- 8-РІВНЕВИЙ НЕПОТОПЛЮВАНИЙ МЕДІА-КАСКАД ---
+# --- НАДІЙНИЙ СТАБІЛЬНИЙ МЕДІА-КАСКАД ІЗ ЗАХИСТОМ ВІД ЛІМІТІВ ---
 
-def media_tier_1_duckduckgo_api(query: str) -> str:
+def find_image_url_from_web(query: str) -> str:
+    clean_query = query.strip()
+    log_event("MEDIA_CASCADE", f"Шукаю фото для: '{clean_query}'")
+
+    # 1. DuckDuckGo Image JSON API
     try:
-        vqd_url = f"https://duckduckgo.com/?{urllib.parse.urlencode({'q': query})}"
+        vqd_url = f"https://duckduckgo.com/?{urllib.parse.urlencode({'q': clean_query})}"
         req_v = urllib.request.Request(vqd_url, headers={'User-Agent': 'Mozilla/5.0'})
         vqd = None
         with urllib.request.urlopen(req_v, timeout=3) as resp:
@@ -250,7 +105,7 @@ def media_tier_1_duckduckgo_api(query: str) -> str:
             if m:
                 vqd = m.group(1)
         if vqd:
-            api_url = f"https://duckduckgo.com/i.js?{urllib.parse.urlencode({'q': query, 'vqd': vqd, 'o': 'json'})}"
+            api_url = f"https://duckduckgo.com/i.js?{urllib.parse.urlencode({'q': clean_query, 'vqd': vqd, 'o': 'json'})}"
             req_a = urllib.request.Request(api_url, headers={'User-Agent': 'Mozilla/5.0', 'Referer': 'https://duckduckgo.com/'})
             with urllib.request.urlopen(req_a, timeout=4) as resp_a:
                 data = json.loads(resp_a.read().decode('utf-8'))
@@ -258,121 +113,11 @@ def media_tier_1_duckduckgo_api(query: str) -> str:
                 if results and results[0].get('image'):
                     return results[0].get('image')
     except Exception as e:
-        log_event("TIER_1_ERR", str(e))
-    return None
+        log_event("DDG_ERR", str(e))
 
-def media_tier_2_wikimedia_commons(query: str) -> str:
-    try:
-        search_api = f"https://commons.wikimedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'generator': 'search', 'gsrsearch': query, 'gsrnamespace': '6', 'gsrlimit': '1', 'prop': 'imageinfo', 'iiprop': 'url', 'format': 'json'})}"
-        req = urllib.request.Request(search_api, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=4) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-            pages = data.get('query', {}).get('pages', {})
-            for _, page_info in pages.items():
-                imageinfo = page_info.get('imageinfo', [])
-                if imageinfo and imageinfo[0].get('url'):
-                    return imageinfo[0].get('url')
-    except Exception as e:
-        log_event("TIER_2_ERR", str(e))
-    return None
-
-def media_tier_3_wikipedia_article_image(query: str) -> str:
-    try:
-        wiki_url = f"https://uk.wikipedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'list': 'search', 'srsearch': query, 'format': 'json'})}"
-        req_w = urllib.request.Request(wiki_url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req_w, timeout=4) as resp_w:
-            w_data = json.loads(resp_w.read().decode('utf-8'))
-            items = w_data.get('query', {}).get('search', [])
-            if items:
-                title = items[0]['title']
-                p_url = f"https://uk.wikipedia.org/w/api.php?{urllib.parse.urlencode({'action': 'query', 'prop': 'pageimages', 'piprop': 'original', 'titles': title, 'format': 'json'})}"
-                req_p = urllib.request.Request(p_url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req_p, timeout=4) as resp_p:
-                    p_data = json.loads(resp_p.read().decode('utf-8'))
-                    pages = p_data.get('query', {}).get('pages', {})
-                    for _, pinfo in pages.items():
-                        if 'original' in pinfo and pinfo['original'].get('source'):
-                            return pinfo['original']['source']
-    except Exception as e:
-        log_event("TIER_3_ERR", str(e))
-    return None
-
-def media_tier_4_duckduckgo_html(query: str) -> str:
-    try:
-        ddg_url = f"https://html.duckduckgo.com/html/?{urllib.parse.urlencode({'q': query + ' photo'})}"
-        req_ddg = urllib.request.Request(ddg_url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req_ddg, timeout=4) as resp_ddg:
-            html = resp_ddg.read().decode('utf-8', errors='ignore')
-            import re
-            img_matches = re.findall(r'https?://[^\s<>"]+?\.(?:jpg|jpeg|png|webp)', html, re.IGNORECASE)
-            if img_matches:
-                return img_matches[0]
-    except Exception as e:
-        log_event("TIER_4_ERR", str(e))
-    return None
-
-def media_tier_5_openverse_api(query: str) -> str:
-    """Рівень 5: Відкритий API вільних медіа Openverse"""
-    try:
-        openverse_url = f"https://api.openverse.engineering/v1/images/?{urllib.parse.urlencode({'q': query, 'page_size': '1'})}"
-        req_ov = urllib.request.Request(openverse_url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req_ov, timeout=4) as resp_ov:
-            ov_data = json.loads(resp_ov.read().decode('utf-8'))
-            results = ov_data.get('results', [])
-            if results and results[0].get('url'):
-                return results[0].get('url')
-    except Exception as e:
-        log_event("TIER_5_ERR", str(e))
-    return None
-
-def media_tier_6_qwant_images(query: str) -> str:
-    """Рівень 6: Альтернативний пошуковий рушій Qwant Media"""
-    try:
-        qwant_url = f"https://lite.qwant.com/?{urllib.parse.urlencode({'q': query, 't': 'images'})}"
-        req_qw = urllib.request.Request(qwant_url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req_qw, timeout=4) as resp_qw:
-            html = resp_qw.read().decode('utf-8', errors='ignore')
-            import re
-            img_matches = re.findall(r'https?://[^\s<>"]+?\.(?:jpg|jpeg|png)', html, re.IGNORECASE)
-            if img_matches:
-                return img_matches[0]
-    except Exception as e:
-        log_event("TIER_6_ERR", str(e))
-    return None
-
-def media_tier_7_unsplash_fallback(query: str) -> str:
-    """Рівень 7: Пряме посилання на публічний прев'ю-сервер"""
-    query_encoded = urllib.parse.quote(query)
-    return f"https://source.unsplash.com/1200x800/?{query_encoded}"
-
-def media_tier_8_dynamic_generator(query: str) -> str:
-    """Рівень 8: Залізобетонний генератор візуалізації"""
-    query_seed = abs(hash(query.lower())) % 10000
+    # 2. Залізобетонний генератор візуалізації за хешем запиту (працює завжди без помилок 429)
+    query_seed = abs(hash(clean_query.lower())) % 10000
     return f"https://picsum.photos/seed/{query_seed}/1200/800"
-
-def find_image_url_from_web(query: str) -> str:
-    clean_query = query.strip()
-    log_event("MEDIA_CASCADE", f"Запуск 8-рівневого каскаду для: '{clean_query}'")
-
-    for tier_func in [
-        media_tier_1_duckduckgo_api,
-        media_tier_2_wikimedia_commons,
-        media_tier_3_wikipedia_article_image,
-        media_tier_4_duckduckgo_html,
-        media_tier_5_openverse_api,
-        media_tier_6_qwant_images,
-        media_tier_7_unsplash_fallback,
-        media_tier_8_dynamic_generator
-    ]:
-        try:
-            res_url = tier_func(clean_query)
-            if res_url and res_url.startswith("http"):
-                log_event("CASCADE_SUCCESS", f"Знайдено на рівні {tier_func.__name__}: {res_url}")
-                return res_url
-        except Exception:
-            continue
-
-    return media_tier_8_dynamic_generator(clean_query)
 
 def sanitize_markdown(text: str) -> str:
     if text.count('*') % 2 != 0:
@@ -411,7 +156,7 @@ async def cmd_start(message: types.Message):
         return
     user_histories[message.from_user.id] = []
     if message.from_user.username == ADMIN_USERNAME:
-        await message.answer("Віталю, я на зв'язку! 8-рівневий непотоплюваний каскад медіа активовано! 😉")
+        await message.answer("Віталю, я на зв'язку! Контекст діалогу та стабільний пошук активовано! 😉")
     else:
         await message.answer("Привіт, Михайле! Я Міссі — персональна асистентка Віталя.")
 
@@ -435,7 +180,7 @@ async def handle_photo_message(message: types.Message):
     save_memory(memory)
     await message.answer("Зберегла твоє фото у свою скарбничку! 😉")
 
-# --- СУВОРЕ ПРЕ-ПЕРЕХОПЛЕННЯ З ЗАХИСТОМ ВІД ТЕКСТУ ---
+# --- СУВОРЕ РОЗДІЛЕННЯ: ФОТО — ТІЛЬКИ ПРИ ПРЯМОМУ НАКАЗІ, ІСТОРІЯ ТА КОНТЕКСТ — ДЛЯ ТЕКСТУ ---
 
 @dp.message(lambda message: message.text is not None)
 async def handle_text_message(message: types.Message):
@@ -456,11 +201,14 @@ async def handle_text_message(message: types.Message):
         memory["факти"].append(f"[{message.from_user.first_name}]: {user_text}")
         save_memory(memory)
 
-    is_photo_request = any(kw in text_lower for kw in ["надішли", "покажи", "знайди", "скинь", "дай", "пришли", "фото", "картинк", "картинку", "картинки"])
+    # ДАТЧИК ФОТО: спрацьовує ЛИШЕ якщо є прямі слова команди надіслати/показати фото/картинку/логотип
+    has_action_kw = any(kw in text_lower for kw in ["надішли", "покажи", "скинь", "дай", "пришли"])
+    has_object_kw = any(obj in text_lower for obj in ["фото", "картинк", "картинку", "картинки", "лого", "логотип"])
+    is_photo_request = has_action_kw and has_object_kw
     
     if is_photo_request:
         search_query = text_lower
-        for word in ["надішли", "покажи", "знайди", "скинь", "дай", "пришли", "фото", "картинку", "картинки", "мені", "будь ласка", "прошу", "реплік", "треба", "в", "на"]:
+        for word in ["надішли", "покажи", "знайди", "скинь", "дай", "пришли", "фото", "картинку", "картинки", "мені", "логотип", "лого", "будь ласка", "прошу"]:
             search_query = search_query.replace(word, "")
         search_query = search_query.strip()
         if not search_query:
@@ -476,13 +224,11 @@ async def handle_text_message(message: types.Message):
             except Exception:
                 pass
 
-        # ГАРАНТОВАНЕ ЗАВАНТАЖЕННЯ ТА ВІДПРАВКА ФАЙЛУ ЧЕРЕЗ КАСКАД
-        sent_ok = False
         try:
-            log_event("MEDIA_PROCESS", f"Запускаю 8-рівневий каскад для: '{search_query}'")
+            log_event("MEDIA_PROCESS", f"Завантажую фото для: '{search_query}'")
             img_url = find_image_url_from_web(search_query)
             if img_url:
-                req = urllib.request.Request(img_url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
+                req = urllib.request.Request(img_url, headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=10) as resp:
                     img_bytes = resp.read()
                     if len(img_bytes) > 200:
@@ -495,29 +241,14 @@ async def handle_text_message(message: types.Message):
                             image_cache[search_query] = sent_msg.photo[-1].file_id
                             memory["image_cache"] = image_cache
                             save_memory(memory)
-                        sent_ok = True
+                        return
         except Exception as e:
-            log_event("CASCADE_SEND_ERR", str(e))
-
-        if sent_ok:
-            return
-
-        # Фінальний рятувальний блок генератора
-        try:
-            fallback_url = f"https://picsum.photos/seed/{abs(hash(search_query)) % 1000}/1200/800"
-            req_fb = urllib.request.Request(fallback_url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req_fb, timeout=6) as resp_fb:
-                fb_bytes = resp_fb.read()
-                input_file = BufferedInputFile(fb_bytes, filename="photo.jpg")
-                await message.answer_photo(photo=input_file, caption=f"Ось тримай за твоїм запитом: «{search_query}»! 😉")
-                return
-        except Exception:
-            pass
+            log_event("PHOTO_ERR", str(e))
 
         await message.answer("Ой, я б із радістю кинула картинку, але мережа на мить сховалася. Спробуй ще раз!")
         return
 
-    # ЗВИЧАЙНА ОБРОБКА ТЕКСТУ
+    # ЗВИЧАЙНИЙ ТЕКСТОВИЙ ДІАЛОГ ІЗ ПОВНИМ ЗБЕРЕЖЕННЯМ КОНТЕКСТУ ІСТОРІЇ
     search_context = ""
     skip_words = ["привіт", "як справи", "що робиш", "добридень", "бувай", "дякую"]
     is_greeting = any(word in text_lower for word in skip_words) and len(text_lower.split()) < 4
@@ -533,9 +264,9 @@ async def handle_text_message(message: types.Message):
     system_prompt = (
         "Ти — Міссі (Міссі Блек), персональна україномовна асистентка, близька подруга та інтелектуальна партнерка Віталя. "
         "Твій стиль спілкування: теплий, дружній, неформальний, живий (як найкраща подруга). "
-        "Ти розумієш контекст, іронію та жарти. Ніколи не сперечайся з Віталієм. "
-        "НІКОЛИ не виводь у чат технічні file_id чи код. Відповідай виключно живою мовою. "
-        "Завжди став 1 влучне уточнююче запитання в кінці.\n"
+        "Ти ідеально пам'ятаєш контекст попередніх повідомлень у діалозі (про що саме йшла мова: піраміди, історичні об'єкти, міста тощо). "
+        "Ніколи не сперечайся з Віталієм. НІКОЛИ не виводь у чат технічні file_id чи код. "
+        "Відповідай виключно живою мовою. Завжди став 1 влучне уточнююче запитання в кінці.\n"
         f"База пам'яті: {json.dumps(memory, ensure_ascii=False)}"
         f"{search_context}"
     )
@@ -568,7 +299,7 @@ async def handle_text_message(message: types.Message):
     await send_long_message(message, reply_text)
 
 async def handle_ping(request):
-    return web.Response(text="Missy is alive 24/7 with 8-tier media cascade!")
+    return web.Response(text="Missy is alive 24/7 with strict context & photo separation!")
 
 async def start_web_server():
     app = web.Application()
@@ -584,7 +315,7 @@ async def start_web_server():
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
     await start_web_server()
-    log_event("BOT", "МІССІ ЗАПУЩЕНА З 8-РІВНЕВИМ КАСКАДОМ МЕДІА...")
+    log_event("BOT", "МІССІ ЗАПУЩЕНА ЗІ СТАБІЛЬНИМ КОНТЕКСТОМ...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
