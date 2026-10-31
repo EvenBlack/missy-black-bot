@@ -886,8 +886,57 @@ async def read_search_body(response):
     return b"".join(chunks)
 
 
+def prepare_web_query(text):
+    text = re.sub(r"^\s*(?:\d+[.)]\s*)?(?:міссі|мисси|missy|катруся|катрусю)[,!:. ]*", "", text, flags=re.I)
+    text = re.sub(r"\s+(?:та|і)\s+(?:дай|додай|надай)\s+посилання.*$", "", text, flags=re.I)
+    text = re.sub(r"\b(?:знайди|покажи|будь ласка)\b", "", text, flags=re.I)
+    return " ".join(text.split()).strip(" ,.!?")[:500]
+
+
+def parse_news_feed(raw):
+    root = ET.fromstring(raw)
+    lines = []
+    for item in root.findall("./channel/item")[:7]:
+        link = search_url(item.findtext("link", ""))
+        if link:
+            lines.append(
+                f"{item.findtext('title', '')}\n"
+                f"Опубліковано: {item.findtext('pubDate', 'дата не вказана')}\n"
+                f"Видання: {item.findtext('source', '')}\n{link}"
+            )
+    return "\n\n".join(lines)
+
+
+async def news_search(query):
+    subject = re.sub(r"\b(?:останні|свіжі|актуальні|новини|новин|сьогодні)\b", "", query, flags=re.I)
+    subject = " ".join(subject.split()) or "Україна"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                "https://news.google.com/rss/search",
+                params={"q": subject + " when:1d", "hl":"uk", "gl":"UA", "ceid":"UA:uk"},
+                headers={"User-Agent": USER_AGENT},
+                timeout=aiohttp.ClientTimeout(total=8, connect=4),
+            ) as response:
+                if response.status != 200:
+                    event("NEWS_SEARCH_ERROR", f"HTTP {response.status}")
+                    return ""
+                result = parse_news_feed(await read_search_body(response))
+                if result:
+                    event("NEWS_SEARCH_SUCCESS", "dated RSS headlines received")
+                    return "Новинна стрічка Google News за останню добу. Це заголовки, не повні статті. Посилання можуть вести через Google News.\n" + result
+    except Exception as exc:
+        event("NEWS_SEARCH_ERROR", type(exc).__name__)
+    return ""
+
+
 async def web_search(query):
     """Return actual source links, or an explicit failure; never invent results."""
+    query = prepare_web_query(query)
+    if re.search(r"\bновин", query, re.I):
+        news = await news_search(query)
+        if news:
+            return news
     try:
         results = await asyncio.wait_for(
             asyncio.to_thread(
@@ -1259,7 +1308,7 @@ async def handle_text(message: types.Message):
     ))
     if not is_greeting and not private_request:
         try:
-            search_results = await asyncio.wait_for(web_search(text), timeout=28)
+            search_results = await asyncio.wait_for(web_search(text), timeout=36)
         except asyncio.TimeoutError:
             search_results = ""
         search_context = "Вебпошук не дав доступних результатів. Не стверджуй, що перевірила актуальні дані. Якщо запит потребує актуальних джерел, прямо повідом про невдалий пошук."
