@@ -135,7 +135,14 @@ class BookContextCache:
         key=(str(owner),book_id,query[:200])
         cached=self.values.get(key)
         if cached and cached[0]>time.monotonic(): return cached[1]
-        result=await store.request('book_context',owner=str(owner),book_id=book_id,query=query[:200])
+        if re.search(r'на початку|початок|перш(?:их|і|ий) (?:розділ|сторін)',query,re.I):
+            pieces=await asyncio.gather(*(store.request('book_context',owner=str(owner),book_id=book_id,query='',chunk_number=n) for n in range(1,5)))
+            result=dict(pieces[0])
+            result['selection']='beginning_fragments'
+            all_chunks=[chunk for piece in pieces for chunk in piece.get('chunks',[])]
+            result['chunks']=[chunk for chunk in all_chunks if len(chunk.get('text',''))>150] or all_chunks
+        else:
+            result=await store.request('book_context',owner=str(owner),book_id=book_id,query=query[:200])
         self.values[key]=(time.monotonic()+300,result)
         if len(self.values)>64: self.values.pop(next(iter(self.values)))
         return result
