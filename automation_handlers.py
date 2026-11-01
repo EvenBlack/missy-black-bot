@@ -100,8 +100,8 @@ class AutomationFeatures:
         await self.store.change(add)
         notice='' if meta['readable'] else '\nУвага: зараз звичайні повідомлення можуть бути недоступні. Бот має бути адміністратором або privacy mode слід вимкнути в BotFather.'
         await message.answer(f"Моніторинг нових доступних повідомлень увімкнено: {meta['title']}. Слова: {', '.join(words)}. Старої історії Telegram бот не завантажує."+notice)
-    async def handle_group(self,message):
-        if message.from_user and self.has_access(message):
+    async def handle_group(self,message,allow_commands=True):
+        if allow_commands and message.from_user and self.has_access(message):
             text=message.text or '';command=text.split(maxsplit=1)[0].split('@')[0] if text else ''
             if command in ('/missy_group','/watch_here'):
                 try:
