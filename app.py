@@ -24,6 +24,8 @@ from photo_archive import inspect_image, archive_image, retrieve_image, retrieve
 from deep_research import research as run_deep_research, research_prompt, report_text, validate_summary
 import uuid
 from automation_handlers import AutomationFeatures
+from assistant_hub import AssistantHub
+from assistant_recall import retrieve_history
 from outbound_policy import OutboundAuthorization
 from account_identity import CONFIRMED_ACCOUNTS, configure_admin, seed_identities, expected_identity, pin_identity, identity_instruction
 from dialogue_archive import DialogueArchive, ArchiveIncoming, ArchiveOutgoing, recall_query, preference_update, apply_preference, search_terms
@@ -1633,6 +1635,9 @@ async def research_command(message: types.Message):
 automation_features = AutomationFeatures(dp, bot, lambda: drive_store, check_access, has_access, send_long, event, None)
 
 
+assistant_hub = AssistantHub(automation_features, read_memory, change_memory, lambda: drive_store, send_long, event)
+
+
 search_book_catalog = register_library(dp, lambda: drive_store, check_access, change_memory, send_long, event)
 
 
@@ -1735,7 +1740,7 @@ async def handle_text(message: types.Message):
         return
 
     if text.startswith("/"):
-        await message.answer("Невідома команда. Доступні /start, /status, /photos, /photo, /edit, /notes, /note, /history, /preferences, /books, /findbook та /automation.")
+        await message.answer("Невідома команда. Доступні /start, /status, /photos, /photo, /edit, /notes, /note, /history, /preferences, /books, /findbook та /automation. Нові можливості: /menu, /assistant_help.")
         return
 
     uid = message.from_user.id
@@ -1783,7 +1788,7 @@ async def handle_text(message: types.Message):
     if re.search(r"запам[’\x27ʼ`]?ятай", text.lower()):
         def add_fact(data):
             facts = data.setdefault("user_facts", {}).setdefault(str(uid), [])
-            facts.append(text[:1000] + (" [Повний текст у власному архіві переписки]" if len(text)>1000 else ""))
+            facts.append({"text":text[:1000] + (" [Повний текст у власному архіві переписки]" if len(text)>1000 else ""), "source":f"telegram:{getattr(message,'message_id','unknown')}", "created":getattr(message,"date",datetime.now(ZoneInfo("Europe/Kyiv"))).isoformat()})
             facts[:] = facts[-30:]
 
         try:
@@ -1998,7 +2003,7 @@ async def handle_text(message: types.Message):
     recall = recall_query(text)
     if recall is not None and drive_store and getattr(drive_store, "history_ready", False) is True:
         try:
-            found = await drive_store.request("search_history", owner=str(uid), query=recall)
+            found = await retrieve_history(drive_store, uid, recall, exclude=f"user:{message.message_id}")
             records = [m for m in found.get("messages", []) if m.get("id") != f"user:{message.message_id}"]
             archive_context = json.dumps(records[:10], ensure_ascii=False)[:16000]
             if found.get("next_cursor") is not None:
@@ -2020,6 +2025,17 @@ async def handle_text(message: types.Message):
             event("BOOK_CONTEXT_ERROR", type(exc).__name__)
             book_context = "Уривки обраної книги недоступні; не вигадуй її зміст."
 
+    try:
+        workspace, _ = await automation_features.store.read()
+        managed_facts = workspace.get('facts', {}).get(str(uid), {})
+        facts = facts + [value['text'] for value in managed_facts.values()]
+        if not active_book and recall is None:
+            document = await assistant_hub.document_context(uid, text, state=workspace)
+            if document:
+                selected = document
+                book_context = format_book_context(document)
+    except Exception as exc:
+        event('ASSISTANT_CONTEXT_ERROR', type(exc).__name__)
     voice_context = memory.get("voice_notes", {}).get(str(uid), [])[-12:]
     base = (
         account_context + "Ти Міссі Блек/Катруся, україномовна асистентка. " + personality +
