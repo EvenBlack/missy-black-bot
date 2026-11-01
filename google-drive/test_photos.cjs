@@ -5,12 +5,12 @@ function makeFolder(){const id='folder-'+(++n),children=[];const folder={getId:(
 const root=makeFolder(),lock={waitLock(){},tryLock:()=>true,releaseLock(){},hasLock:()=>true};
 const c={console:{log(){}},LockService:{getScriptLock:()=>lock},PropertiesService:{getScriptProperties:()=>({getProperty:k=>props.get(k),setProperty:(k,v)=>props.set(k,v)})},DriveApp:{getFolderById:id=>folders.get(id)||root,getFileById:id=>files.get(id)},Utilities:{getUuid:()=> 'fake-test-key',Charset:{UTF_8:'utf8'},DigestAlgorithm:{SHA_256:'sha256'},computeDigest:(_,bytes,charset)=>{if(typeof bytes==='string')assert.equal(charset,'utf8','Text digests must specify UTF-8 explicitly');return [...crypto.createHash('sha256').update(Buffer.from(bytes)).digest()].map(b=>b>127?b-256:b);},base64Decode:s=>[...Buffer.from(s,'base64')],base64Encode:bytes=>Buffer.from(bytes).toString('base64'),newBlob:(bytes,mime,name)=>({bytes,mime,name})},MimeType:{PLAIN_TEXT:'text/plain'},ContentService:{MimeType:{JSON:'json'},createTextOutput:s=>({setMimeType:()=>JSON.parse(s)})}};
 vm.createContext(c);vm.runInContext(fs.readFileSync(__dirname+'/Memory.gs','utf8'),c);
-c.setupMemory();c.setupMemory();assert.equal(folders.size,8);assert.equal(files.size,2);
+c.setupMemory();c.setupMemory();assert.equal(folders.size,9);assert.equal(files.size,4);
 const secret=props.get('MISSY_MEMORY_SECRET');const call=r=>c.doPost({postData:{contents:JSON.stringify({...r,secret})}});
 const bytes=Buffer.from('sample unchanged image bytes'),sha256=crypto.createHash('sha256').update(bytes).digest('hex'),archive_id=sha256.slice(0,24);
 const upload={action:'archive_photo',owner:'7',sha256,content_b64:bytes.toString('base64'),mime:'image/png',ext:'png',filename:'original.png',caption:'Birthday beach',original:true,created:'2026-11-01T00:00:00+02:00'};
-assert.equal(call(upload).sha256,sha256);assert.equal(files.size,4);
-assert.equal(call(upload).archive_id,archive_id);assert.equal(files.size,4);
+assert.equal(call(upload).sha256,sha256);assert.equal(files.size,6);
+assert.equal(call(upload).archive_id,archive_id);assert.equal(files.size,6);
 assert.equal(call({action:'get_photo',owner:'8',archive_id}).error,'PHOTO_NOT_FOUND');
 let result=call({action:'get_photo',owner:'7',archive_id});assert.equal(result.content_b64,bytes.toString('base64'));assert.equal(result.filename,'original.png');
 assert.equal(call({action:'list_photos',owner:'7',query:'birthday beach'}).photos.length,1);
@@ -123,3 +123,16 @@ own.getFilesByName(bookId+'.index.json').next().setContent('broken');
 assert.equal(call({action:'book_context',owner:'71',book_id:bookId,query:''}).error,'BOOK_CHECKSUM');
 assert.equal(call(bi).chunks,2);
 console.log('Book checks passed: staged import, verified index before listing, UTF-8, owner isolation, original bytes, keyword retrieval, overview samples and repair after index corruption.');
+
+// Dedicated automation state: CAS, unchanged polls, backup and no unsafe rollback.
+assert.equal(call({action:'get'}).automation_ready,true);
+let auto=call({action:'automation_get'});assert.equal(auto.revision,0);assert.deepEqual(Object.keys(auto.data).sort(),['jobs','matches','owners','sources']);
+assert.equal(call({action:'automation_get',known_revision:0}).unchanged,true);
+auto.data.jobs.test={owner:'71',kind:'broadcast',status:'draft',body:'Never send a draft'};
+assert.equal(call({action:'automation_put',expected_revision:0,data:auto.data}).revision,1);
+assert.equal(call({action:'automation_put',expected_revision:0,data:auto.data}).error,'REVISION_CONFLICT');
+assert.equal(call({action:'automation_put',expected_revision:1,data:{}}).error,'INVALID_AUTOMATION');
+assert.equal(call({action:'automation_get'}).data.jobs.test.status,'draft');
+const autoFile=files.get(props.get('MISSY_AUTOMATION_FILE_ID'));autoFile.setContent('corrupt');
+assert.equal(call({action:'automation_get'}).error,'AUTOMATION_STORAGE_INVALID');assert.equal(autoFile.getBlob().getDataAsString(),'corrupt');
+console.log('Automation checks passed: separate state, revision conflicts, compact unchanged polls, schema checks and no rollback of delivery ledger.');
