@@ -69,3 +69,21 @@ class PromptTests(unittest.IsolatedAsyncioTestCase):
         store=SimpleNamespace(request=AsyncMock(return_value={'content_b64':'YWJj','sha256':'b'*64,'filename':'book.epub'}))
         with self.assertRaisesRegex(MemoryUnavailable,'INVALID_BOOK_ORIGINAL'):
             await BookContextCache().get(store,7,'a'*24,'На початку')
+
+    def test_english_annotation_and_editorial_preface_are_not_story_beginning(self):
+        from book_library import beginning_chunks
+        chunks=[
+            {'chapter':'Annotation','text':'A distant northern border. '+('This book contains linked adventures and an unusual world. '*30)},
+            {'chapter':'Автор','text':'Назва книги'},
+            {'chapter':'Про сучасну фантастику','text':('Сучасна література має багато цікавих напрямів. '*50)},
+            {'chapter':'Про сучасну фантастику','text':('Автор повертається до витоків жанру і досвіду попередників. '*30)},
+            {'chapter':'ПІВНІЧ','text':'Сокира і скеля'},
+            {'chapter':'Перша оповідь','text':('На перевалі розпочалася хуртовина. '*15)+'\n— Остапе, перевір стежку перед загоном і не поспішай.\n— Гаразд, зараз усе перевірю, — відповів Остап.'},
+            {'chapter':'Перша оповідь','text':('Остап обернувся до Марка й уважно вислухав наказ. '*20)},
+            {'chapter':'Перша оповідь','text':'— Пане лейтенанте, — Петро підійшов до командира.\n'+('Марко передав Петрові свою десятку і новий наказ. '*15)}]
+        selected=beginning_chunks(chunks)
+        self.assertEqual([c['number'] for c in selected],[6,7,8])
+        context=format_book_context({'title':'Тестова книга','chunks':selected,'total_chunks':8})
+        for name in ['Остап','Марко','Петро']:self.assertIn(name,context)
+        self.assertNotIn('Annotation',context)
+        self.assertNotIn('Про сучасну фантастику',context)
