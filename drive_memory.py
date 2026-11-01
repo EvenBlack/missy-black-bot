@@ -37,6 +37,7 @@ class DriveMemory:
         self.archive_protocol = 0
         self.history_ready = False
         self.books_ready = False
+        self.automation_ready = False
         self.recovered = False
 
     async def request(self, action, **fields):
@@ -53,7 +54,7 @@ class DriveMemory:
     async def _request_once(self, action, **fields):
         payload = dict(fields, action=action, secret=self.secret)
         try:
-            async with aiohttp.ClientSession(json_serialize=lambda value: json.dumps(value, ensure_ascii=False), timeout=aiohttp.ClientTimeout(total=60 if action in {'archive_photo', 'get_photo', 'get_identity', 'set_identity', 'store_voice', 'list_voice', 'append_history', 'search_history', 'store_book', 'index_book', 'book_context', 'get_book', 'list_books'} else 25, connect=8)) as session:
+            async with aiohttp.ClientSession(json_serialize=lambda value: json.dumps(value, ensure_ascii=False), timeout=aiohttp.ClientTimeout(total=60 if action in {'archive_photo', 'get_photo', 'get_identity', 'set_identity', 'store_voice', 'list_voice', 'append_history', 'search_history', 'store_book', 'index_book', 'book_context', 'get_book', 'list_books', 'automation_get', 'automation_put'} else 25, connect=8)) as session:
                 method, url = 'POST', self.url
                 # ContentService redirects POST to a read-only Google-hosted output URL.
                 for _ in range(4):
@@ -71,7 +72,7 @@ class DriveMemory:
                         chunks, size = [], 0
                         async for chunk in response.content.iter_chunked(65536):
                             size += len(chunk)
-                            if size > (12 if action in {'get_photo', 'get_identity', 'get_book', 'search_history'} else 2) * 1024 * 1024:
+                            if size > (12 if action in {'get_photo', 'get_identity', 'get_book', 'search_history', 'automation_get'} else 2) * 1024 * 1024:
                                 raise MemoryUnavailable('MEMORY_RESPONSE_TOO_LARGE')
                             chunks.append(chunk)
                         result = json.loads(b''.join(chunks))
@@ -86,7 +87,7 @@ class DriveMemory:
         if not isinstance(result, dict) or result.get('ok') is not True:
             if isinstance(result, dict) and result.get('error') == 'REVISION_CONFLICT':
                 raise RevisionConflict('REVISION_CONFLICT')
-            safe_errors = {'UNAUTHORIZED', 'SETUP_REQUIRED', 'STORAGE_ERROR', 'POST_REQUIRED', 'BUSY', 'INVALID_ACTION', 'INVALID_DATA', 'MEMORY_TOO_LARGE', 'INVALID_REQUEST', 'BACKUP_UNAVAILABLE', 'BACKUP_SETUP_REQUIRED', 'ARCHIVE_SETUP_REQUIRED', 'INVALID_PHOTO', 'PHOTO_NOT_FOUND', 'PHOTO_CONFLICT', 'IDENTITY_SETUP_REQUIRED', 'IDENTITY_NOT_SET', 'VOICE_SETUP_REQUIRED', 'INVALID_VOICE', 'VOICE_CONFLICT', 'VOICE_NOT_FOUND', 'VOICE_KEY_MISMATCH', 'VOICE_AUDIO_SIZE', 'VOICE_AUDIO_CHECKSUM', 'INVALID_HISTORY', 'HISTORY_CONFLICT', 'INVALID_BOOK', 'BOOK_CHECKSUM', 'BOOK_CONFLICT', 'BOOK_NOT_FOUND', 'INVALID_BOOK_INDEX', 'BOOK_INDEX_PENDING'}
+            safe_errors = {'UNAUTHORIZED', 'SETUP_REQUIRED', 'STORAGE_ERROR', 'POST_REQUIRED', 'BUSY', 'INVALID_ACTION', 'INVALID_DATA', 'MEMORY_TOO_LARGE', 'INVALID_REQUEST', 'BACKUP_UNAVAILABLE', 'BACKUP_SETUP_REQUIRED', 'ARCHIVE_SETUP_REQUIRED', 'INVALID_PHOTO', 'PHOTO_NOT_FOUND', 'PHOTO_CONFLICT', 'IDENTITY_SETUP_REQUIRED', 'IDENTITY_NOT_SET', 'VOICE_SETUP_REQUIRED', 'INVALID_VOICE', 'VOICE_CONFLICT', 'VOICE_NOT_FOUND', 'VOICE_KEY_MISMATCH', 'VOICE_AUDIO_SIZE', 'VOICE_AUDIO_CHECKSUM', 'INVALID_HISTORY', 'HISTORY_CONFLICT', 'INVALID_BOOK', 'BOOK_CHECKSUM', 'BOOK_CONFLICT', 'BOOK_NOT_FOUND', 'INVALID_BOOK_INDEX', 'BOOK_INDEX_PENDING', 'AUTOMATION_SETUP_REQUIRED', 'AUTOMATION_STORAGE_INVALID', 'INVALID_AUTOMATION', 'AUTOMATION_TOO_LARGE'}
             code = result.get('error') if isinstance(result, dict) else None
             raise MemoryUnavailable('MEMORY_' + code if isinstance(code, str) and code in safe_errors else 'MEMORY_REQUEST_REJECTED')
         revision = result.get('revision')
@@ -105,6 +106,7 @@ class DriveMemory:
         self.archive_protocol = result.get('archive_protocol', 0)
         self.history_ready = result.get('history_ready') is True
         self.books_ready = result.get('books_ready') is True
+        self.automation_ready = result.get('automation_ready') is True
         self.recovered = result.get('recovered') is True
         data = result['data']
         if data is not None:
