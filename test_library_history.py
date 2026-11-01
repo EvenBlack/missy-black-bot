@@ -195,3 +195,25 @@ class HistoryTests(unittest.IsolatedAsyncioTestCase):
         store._request_once=AsyncMock(side_effect=MemoryUnavailable('MEMORY_NETWORK_OR_RESPONSE_ERROR'))
         with self.assertRaises(MemoryUnavailable):await store.request('put')
         store._request_once.assert_awaited_once()
+
+    async def test_commands_wait_for_previous_message_but_other_owner_does_not(self):
+        archive=DialogueArchive(lambda:None,lambda m:True,MagicMock())
+        archive.append=AsyncMock()
+        middleware=ArchiveIncoming(archive)
+        started=asyncio.Event();release=asyncio.Event();state={};seen=[]
+        async def handler(event,data):
+            if event.text=='set preference':
+                started.set();await release.wait();state['preference']='short'
+            elif event.text=='read preference':
+                seen.append(state.get('preference'))
+            else:seen.append('other user')
+        first=asyncio.create_task(middleware(handler,message(1,'set preference'),{}))
+        await started.wait()
+        second=asyncio.create_task(middleware(handler,message(1,'read preference'),{}))
+        await middleware(handler,message(2,'independent'),{})
+        await asyncio.sleep(0)
+        self.assertEqual(seen,['other user'])
+        self.assertFalse(second.done())
+        self.assertGreaterEqual(archive.append.await_count,3)
+        release.set();await asyncio.gather(first,second)
+        self.assertEqual(seen,['other user','short'])
