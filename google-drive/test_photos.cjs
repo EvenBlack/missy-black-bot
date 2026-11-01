@@ -5,7 +5,7 @@ function makeFolder(){const id='folder-'+(++n),children=[];const folder={getId:(
 const root=makeFolder(),lock={waitLock(){},tryLock:()=>true,releaseLock(){},hasLock:()=>true};
 const c={console:{log(){}},LockService:{getScriptLock:()=>lock},PropertiesService:{getScriptProperties:()=>({getProperty:k=>props.get(k),setProperty:(k,v)=>props.set(k,v)})},DriveApp:{getFolderById:id=>folders.get(id)||root,getFileById:id=>files.get(id)},Utilities:{getUuid:()=> 'fake-test-key',Charset:{UTF_8:'utf8'},DigestAlgorithm:{SHA_256:'sha256'},computeDigest:(_,bytes,charset)=>{if(typeof bytes==='string')assert.equal(charset,'utf8','Text digests must specify UTF-8 explicitly');return [...crypto.createHash('sha256').update(Buffer.from(bytes)).digest()].map(b=>b>127?b-256:b);},base64Decode:s=>[...Buffer.from(s,'base64')],base64Encode:bytes=>Buffer.from(bytes).toString('base64'),newBlob:(bytes,mime,name)=>({bytes,mime,name})},MimeType:{PLAIN_TEXT:'text/plain'},ContentService:{MimeType:{JSON:'json'},createTextOutput:s=>({setMimeType:()=>JSON.parse(s)})}};
 vm.createContext(c);vm.runInContext(fs.readFileSync(__dirname+'/Memory.gs','utf8'),c);
-c.setupMemory();c.setupMemory();assert.equal(folders.size,6);assert.equal(files.size,2);
+c.setupMemory();c.setupMemory();assert.equal(folders.size,8);assert.equal(files.size,2);
 const secret=props.get('MISSY_MEMORY_SECRET');const call=r=>c.doPost({postData:{contents:JSON.stringify({...r,secret})}});
 const bytes=Buffer.from('sample unchanged image bytes'),sha256=crypto.createHash('sha256').update(bytes).digest('hex'),archive_id=sha256.slice(0,24);
 const upload={action:'archive_photo',owner:'7',sha256,content_b64:bytes.toString('base64'),mime:'image/png',ext:'png',filename:'original.png',caption:'Birthday beach',original:true,created:'2026-11-01T00:00:00+02:00'};
@@ -80,3 +80,46 @@ console.log('Voice checks passed: Latin folders, original audio/transcript, user
 
 const unicode=voicePayload('notes','Український текст 🇺🇦\nНовий рядок');assert.equal(call(unicode).note_id,unicode.note_id);
 assert.equal(call({...unicode,content_b64:Buffer.from('changed bytes').toString('base64')}).error,'VOICE_AUDIO_CHECKSUM');
+
+// Full history uses private owner folders, immutable events and paged day shards.
+function history(owner,id,text,created='2026-11-01T01:00:00Z') {
+ const record_json=JSON.stringify({id,role:id.startsWith('assistant')?'assistant':'user',text,created,kind:'text',telegram:{text}});
+ return {action:'append_history',owner,record_json,digest:crypto.createHash('sha256').update(record_json).digest('hex')};
+}
+const h=history('71','user:123','Мій спогад про синю чашку 🇺🇦','2026-10-24T01:00:00Z');
+assert.equal(call(h).id,'user:123');const hc=files.size;
+assert.equal(call(h).digest,h.digest);assert.equal(files.size,hc);
+assert.equal(call(history('71','assistant:124','Я запам’ятала синю чашку.','2026-10-24T01:00:01Z')).id,'assistant:124');
+assert.equal(call(history('72','user:123','PRIVATE_SECOND_PERSON')).id,'user:123');
+let hr=call({action:'search_history',owner:'71',query:'чашку'});
+assert.equal(hr.messages.length,2);assert(!JSON.stringify(hr).includes('PRIVATE_SECOND_PERSON'));
+assert.equal(call({action:'search_history',owner:'72',query:'чашку'}).messages.length,0);
+assert.equal(call(history('71','user:123','Changed text','2026-10-24T01:00:00Z')).error,'HISTORY_CONFLICT');
+assert.equal(call({...h,digest:'bad'}).error,'INVALID_HISTORY');
+for(let i=0;i<35;i++) call(history('73','user:'+i,'record '+i,new Date(Date.UTC(2026,8,1+i)).toISOString()));
+hr=call({action:'search_history',owner:'73',query:''});assert.equal(hr.next_cursor,30);
+assert.equal(call({action:'search_history',owner:'73',query:'',cursor:30}).next_cursor,null);
+console.log('History checks passed: immutable full text, signed UTF-8 checksums, owner separation, exact retries, past-week recall and paging.');
+
+// Book upload and indexing are separate; only a complete verified index is visible.
+const bookBytes=Buffer.from('test book original'),bookSha=crypto.createHash('sha256').update(bookBytes).digest('hex'),bookId=bookSha.slice(0,24);
+const bp={action:'store_book',owner:'71',book_id:bookId,sha256:bookSha,ext:'epub',title:'Книга про море',author:'Автор',filename:'book.epub',content_b64:bookBytes.toString('base64'),created:'2026-11-01'};
+assert.equal(call(bp).sha256,bookSha);const bc=files.size;assert.equal(call(bp).size,bookBytes.length);assert.equal(files.size,bc);
+assert.equal(call({action:'list_books',owner:'71'}).books.length,0);
+assert.equal(call({action:'get_book',owner:'71',book_id:bookId}).error,'BOOK_INDEX_PENDING');
+const index_json=JSON.stringify({version:1,chunks:[{chapter:'Початок',text:'Синя чашка і море.'},{chapter:'Кінець',text:'Дівчина знайшла подарунок.'}]});
+const bi={action:'index_book',owner:'71',book_id:bookId,index_json,index_digest:crypto.createHash('sha256').update(index_json).digest('hex')};
+assert.equal(call({...bi,index_digest:'bad'}).error,'INVALID_BOOK_INDEX');
+assert.equal(call(bi).chunks,2);assert.equal(call(bi).chunks,2);
+assert.equal(call({action:'list_books',owner:'71',query:'море'}).books.length,1);
+assert.equal(call({action:'list_books',owner:'72'}).books.length,0);
+assert.equal(call({action:'book_context',owner:'72',book_id:bookId,query:'чашка'}).error,'BOOK_NOT_FOUND');
+let br=call({action:'book_context',owner:'71',book_id:bookId,query:'чашка'});assert.equal(br.chunks.length,1);assert.equal(br.chunks[0].number,1);
+br=call({action:'book_context',owner:'71',book_id:bookId,query:'підсумуй'});assert.equal(br.selection,'sampled_overview');assert.equal(br.chunks.length,2);
+br=call({action:'book_context',owner:'71',book_id:bookId,query:'',chunk_number:2});assert.equal(br.chunks[0].text,'Дівчина знайшла подарунок.');
+assert.equal(call({action:'get_book',owner:'71',book_id:bookId}).content_b64,bookBytes.toString('base64'));
+const bf=folders.get(props.get('MISSY_BOOKS_FOLDER_ID'));const own=bf.getFoldersByName('71').next();
+own.getFilesByName(bookId+'.index.json').next().setContent('broken');
+assert.equal(call({action:'book_context',owner:'71',book_id:bookId,query:''}).error,'BOOK_CHECKSUM');
+assert.equal(call(bi).chunks,2);
+console.log('Book checks passed: staged import, verified index before listing, UTF-8, owner isolation, original bytes, keyword retrieval, overview samples and repair after index corruption.');
