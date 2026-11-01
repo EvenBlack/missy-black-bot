@@ -41,9 +41,16 @@ def bounded_prompt(base, current, sections, history):
 
 
 def format_book_context(result):
-    lines=[f"Книга: {result.get('title','')}; добір: {result.get('selection','')}; фрагментів у книзі: {result.get('total_chunks',0)}"]
-    for chunk in result.get('chunks',[]):
-        lines.append(f"Фрагмент {chunk.get('number')}: {chunk.get('chapter','')}\n{chunk.get('text','')}")
+    # Spread the small model budget across sources instead of spending it all
+    # on the first 5000-character chunk (often front matter).
+    title=clip_bytes(f"Книга: {result.get('title','')}; добір: {result.get('selection','')}; фрагментів: {result.get('total_chunks',0)}",400)
+    chunks=result.get('chunks',[])[:3]
+    headers=[clip_bytes(f"Фрагмент {c.get('number')}: {c.get('chapter','')}",180) for c in chunks]
+    remaining=3000-len(title.encode())-sum(len(h.encode())+8 for h in headers)
+    per_chunk=max(0,remaining//max(1,len(chunks)))
+    lines=[title]
+    for header,chunk in zip(headers,chunks):
+        lines.append(header+'\n'+clip_bytes(chunk.get('text',''),per_chunk))
     return '\n\n'.join(lines)
 
 
