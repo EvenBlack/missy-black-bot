@@ -2087,7 +2087,8 @@ dialogue_archive = DialogueArchive(lambda: drive_store, lambda message: has_acce
 class EnabledHistoryIncoming(ArchiveIncoming):
     async def __call__(self, handler, event, data):
         if isinstance(event, types.Message) and event.chat.type != 'private':
-            return await automation_features.handle_group(event)
+            is_edit=getattr(data.get('event_update'),'edited_message',None) is not None
+            return await automation_features.handle_group(event,allow_commands=not is_edit)
         if not dialogue_archive_enabled():
             return await handler(event, data)
         return await super().__call__(handler, event, data)
