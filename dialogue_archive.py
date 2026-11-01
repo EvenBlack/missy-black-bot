@@ -75,6 +75,7 @@ class DialogueArchive:
         self.get_store, self.access, self.logger = get_store, access, logger
         self.owners = set()
         self.locks = {}
+        self.processing_locks = {}
 
     async def append(self, owner, record):
         store = self.get_store()
@@ -115,7 +116,10 @@ class ArchiveIncoming(BaseMiddleware):
             self.archive.logger('HISTORY_INPUT_ERROR', type(exc).__name__)
             await self.archive.warn(event)
             return  # Do not acknowledge processing when the original cannot be archived.
-        return await handler(event, data)
+        # Inputs are durably recorded before waiting. Process all commands, text,
+        # voice and uploads in order for this owner; other owners remain independent.
+        async with self.archive.processing_locks.setdefault(owner, asyncio.Lock()):
+            return await handler(event, data)
 
 
 class ArchiveOutgoing(BaseRequestMiddleware):
