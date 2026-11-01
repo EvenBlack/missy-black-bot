@@ -22,7 +22,7 @@ from ddgs import DDGS
 from drive_memory import DriveMemory, MemoryUnavailable, RevisionConflict
 from photo_archive import inspect_image, archive_image, retrieve_image, retrieve_identity, MAX_ARCHIVE_BYTES
 from dialogue_archive import DialogueArchive, ArchiveIncoming, ArchiveOutgoing, recall_query, preference_update, apply_preference, search_terms
-from prompt_budget import bounded_prompt, format_book_context, model_error, OUTPUT_TOKENS
+from prompt_budget import bounded_prompt, format_book_context, model_error, book_prompt, character_answer, OUTPUT_TOKENS
 from book_library import BookContextCache
 from library_handlers import register_library
 from local_image_edit import edit_image, parse_edit, EditError
@@ -1909,6 +1909,7 @@ async def handle_text(message: types.Message):
             event("HISTORY_RECALL_ERROR", type(exc).__name__)
             archive_context = "Пошук архіву недоступний; не стверджуй, що перевірила давню переписку."
     book_context = ""
+    selected = None
     active_book = memory.get("user_books", {}).get(str(uid), {}).get("active")
     if active_book and not feedback and recall is None:
         try:
@@ -1937,6 +1938,9 @@ async def handle_text(message: types.Message):
         ('Голосові спогади', json.dumps(voice_context[-3:],ensure_ascii=False), 650),
         ('Вебпошук', search_context, 2200),
     ], history)
+    characters = bool(selected and str(selected.get('selection','')).startswith('beginning_') and re.search(r'персонаж|геро|імен|\bхто\b', text, re.I))
+    if book_context:
+        payload = book_prompt(text,book_context,profile_text,history,characters=characters)
     event('PROMPT_BUDGET', 'bytes=' + str(sum(len(m['content'].encode('utf-8')) for m in payload)))
 
     try:
@@ -1945,7 +1949,8 @@ async def handle_text(message: types.Message):
                 groq_client.chat.completions.create,
                 model=GROQ_MODEL,
                 messages=payload,
-                temperature=0.6,
+                temperature=0.1 if book_context else 0.6,
+                **({"response_format":{"type":"json_object"}} if characters else {}),
                 **completion_options(OUTPUT_TOKENS),
             ),
             timeout=30,
@@ -1955,6 +1960,8 @@ async def handle_text(message: types.Message):
             response.choices[0].message.content
             or "Не змогла сформувати відповідь."
         )
+        if characters:
+            answer = character_answer(answer, book_context)
 
     except Exception as exc:
         event(
