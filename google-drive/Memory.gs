@@ -60,8 +60,16 @@ function setupMemory() {
       }
       props.setProperty('MISSY_IDENTITY_FOLDER_ID', images.getId());
     }
-    [['MISSY_HISTORY_FOLDER_ID','Conversation_History'],['MISSY_BOOKS_FOLDER_ID','Book_Library']].forEach(pair => {
+    [['MISSY_HISTORY_FOLDER_ID','Conversation_History'],['MISSY_BOOKS_FOLDER_ID','Book_Library'],['MISSY_AUTOMATION_FOLDER_ID','Automation_State']].forEach(pair => {
       if (!props.getProperty(pair[0])) props.setProperty(pair[0], childFolder_(folder, pair[1]).getId());
+    });
+    const automationFolder=DriveApp.getFolderById(props.getProperty('MISSY_AUTOMATION_FOLDER_ID'));
+    [['MISSY_AUTOMATION_FILE_ID','automation_state.json'],['MISSY_AUTOMATION_BACKUP_ID','automation_backup.json']].forEach(pair => {
+      if(!props.getProperty(pair[0])) {
+        const file=exactPhotoFile_(automationFolder,pair[1])||automationFolder.createFile(pair[1],JSON.stringify({revision:0,data:{owners:{},jobs:{},sources:{},matches:{}}}),MimeType.PLAIN_TEXT);
+        readAutomation_(file);
+        props.setProperty(pair[0],file.getId());
+      }
     });
     Object.keys(VOICE_FOLDERS).forEach(category => {
       const key = 'MISSY_VOICE_' + category.toUpperCase() + '_ID';
@@ -115,14 +123,15 @@ function doPost(e) {
     if (!sameSecret_(request.secret, props.getProperty('MISSY_MEMORY_SECRET'))) {
       return json_({ok: false, error: 'UNAUTHORIZED'});
     }
-    if (!['get', 'put', 'archive_photo', 'get_photo', 'list_photos', 'set_identity', 'get_identity', 'store_voice', 'list_voice', 'get_voice', 'append_history', 'search_history', 'store_book', 'index_book', 'list_books', 'book_context', 'get_book'].includes(request.action)) return json_({ok: false, error: 'INVALID_ACTION'});
+    if (!['get', 'put', 'archive_photo', 'get_photo', 'list_photos', 'set_identity', 'get_identity', 'store_voice', 'list_voice', 'get_voice', 'append_history', 'search_history', 'store_book', 'index_book', 'list_books', 'book_context', 'get_book', 'automation_get', 'automation_put'].includes(request.action)) return json_({ok: false, error: 'INVALID_ACTION'});
     const fileId = props.getProperty('MISSY_MEMORY_FILE_ID');
     if (!fileId) return json_({ok: false, error: 'SETUP_REQUIRED'});
     lock = LockService.getScriptLock();
     if (!lock.tryLock(10000)) return json_({ok: false, error: 'BUSY'});
+    if (['automation_get','automation_put'].includes(request.action)) return automationRequest_(request,props);
     if (['append_history','search_history'].includes(request.action)) return historyRequest_(request, props);
     if (['store_book','index_book','list_books','book_context','get_book'].includes(request.action)) return bookRequest_(request, props);
-    if (['store_voice', 'list_voice', 'get_voice', 'append_history', 'search_history', 'store_book', 'index_book', 'list_books', 'book_context', 'get_book'].includes(request.action)) return voiceRequest_(request, props);
+    if (['store_voice', 'list_voice', 'get_voice'].includes(request.action)) return voiceRequest_(request, props);
     if (['set_identity', 'get_identity'].includes(request.action)) {
       return identityRequest_(request, props);
     }
@@ -143,7 +152,7 @@ function doPost(e) {
       file.setContent(JSON.stringify(store));
       recovered = true;
     }
-    if (request.action === 'get') return json_({ok: true, revision: store.revision, data: store.data, backup_ready: Boolean(backupId), photo_archive_ready: Boolean(props.getProperty('MISSY_PHOTO_FOLDER_ID')), identity_ready: Boolean(props.getProperty('MISSY_IDENTITY_FOLDER_ID')), archive_protocol: 3, history_ready:Boolean(props.getProperty('MISSY_HISTORY_FOLDER_ID')), books_ready:Boolean(props.getProperty('MISSY_BOOKS_FOLDER_ID')), voice_protocol: 2, voice_ready: Object.keys(VOICE_FOLDERS).every(k => Boolean(props.getProperty('MISSY_VOICE_' + k.toUpperCase() + '_ID'))), recovered: recovered});
+    if (request.action === 'get') return json_({ok: true, revision: store.revision, data: store.data, backup_ready: Boolean(backupId), photo_archive_ready: Boolean(props.getProperty('MISSY_PHOTO_FOLDER_ID')), identity_ready: Boolean(props.getProperty('MISSY_IDENTITY_FOLDER_ID')), automation_ready:Boolean(props.getProperty('MISSY_AUTOMATION_FILE_ID')), archive_protocol: 3, history_ready:Boolean(props.getProperty('MISSY_HISTORY_FOLDER_ID')), books_ready:Boolean(props.getProperty('MISSY_BOOKS_FOLDER_ID')), voice_protocol: 2, voice_ready: Object.keys(VOICE_FOLDERS).every(k => Boolean(props.getProperty('MISSY_VOICE_' + k.toUpperCase() + '_ID'))), recovered: recovered});
     if (!Number.isSafeInteger(request.expected_revision) || request.expected_revision !== store.revision) {
       return json_({ok: false, error: 'REVISION_CONFLICT'});
     }
@@ -291,7 +300,7 @@ function voiceRequest_(request, props) {
   if (request.action === 'list_voice') {
     const words = String(request.query || '').slice(0,150).toLowerCase().split(/\s+/).filter(Boolean);
     const notes = []; let unreadable = 0;
-    [['MISSY_HISTORY_FOLDER_ID','Conversation_History'],['MISSY_BOOKS_FOLDER_ID','Book_Library']].forEach(pair => {
+    [['MISSY_HISTORY_FOLDER_ID','Conversation_History'],['MISSY_BOOKS_FOLDER_ID','Book_Library'],['MISSY_AUTOMATION_FOLDER_ID','Automation_State']].forEach(pair => {
       if (!props.getProperty(pair[0])) props.setProperty(pair[0], childFolder_(folder, pair[1]).getId());
     });
     Object.keys(VOICE_FOLDERS).forEach(category => {
@@ -516,4 +525,37 @@ function bookRequest_(request, props) {
     selected=chunks.map((c,i)=>({number:i+1,chapter:c.chapter,text:c.text,score:words.reduce((n,w)=>n+((c.chapter+' '+c.text).toLowerCase().includes(w)?1:0),0)})).filter(c=>c.score>0).sort((a,b)=>b.score-a.score||a.number-b.number).slice(0,5);
   }
   return json_({ok:true,book_id:id,title:m.title,author:m.author,index_digest:m.index_digest,total_chunks:chunks.length,selection:overview?'sampled_overview':'keyword_matches',chunks:selected});
+}
+
+
+function readAutomation_(file) {
+  const store=JSON.parse(file.getBlob().getDataAsString('UTF-8'));
+  if(!Number.isSafeInteger(store.revision)||store.revision<0||!validAutomationData_(store.data))throw Error('Invalid automation state');
+  return store;
+}
+function validAutomationData_(data) {
+  return data&&typeof data==='object'&&!Array.isArray(data)&&['owners','jobs','sources','matches'].every(k=>data[k]&&typeof data[k]==='object'&&!Array.isArray(data[k]));
+}
+function automationRequest_(request,props) {
+  const id=props.getProperty('MISSY_AUTOMATION_FILE_ID');
+  if(!id)return json_({ok:false,error:'AUTOMATION_SETUP_REQUIRED'});
+  const file=DriveApp.getFileById(id);
+  // Never roll an outbound-delivery ledger back automatically: doing so can
+  // replay messages that Telegram already accepted before a storage failure.
+  let state;
+  try{state=readAutomation_(file);}catch(e){return json_({ok:false,error:'AUTOMATION_STORAGE_INVALID'});}
+  if(request.action==='automation_get') {
+    if(request.known_revision===state.revision)return json_({ok:true,revision:state.revision,unchanged:true});
+    return json_({ok:true,revision:state.revision,data:state.data});
+  }
+  if(!Number.isSafeInteger(request.expected_revision)||request.expected_revision!==state.revision)return json_({ok:false,error:'REVISION_CONFLICT'});
+  if(!validAutomationData_(request.data))return json_({ok:false,error:'INVALID_AUTOMATION'});
+  const next={revision:state.revision+1,data:request.data};const serialized=JSON.stringify(next);
+  if(serialized.length>810000)return json_({ok:false,error:'AUTOMATION_TOO_LARGE'});
+  const backup=props.getProperty('MISSY_AUTOMATION_BACKUP_ID');
+  if(!backup)return json_({ok:false,error:'AUTOMATION_SETUP_REQUIRED'});
+  DriveApp.getFileById(backup).setContent(JSON.stringify(state));
+  file.setContent(serialized);
+  if(file.getBlob().getDataAsString('UTF-8')!==serialized)return json_({ok:false,error:'STORAGE_ERROR'});
+  return json_({ok:true,revision:next.revision});
 }
