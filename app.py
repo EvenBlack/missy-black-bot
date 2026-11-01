@@ -26,6 +26,7 @@ import uuid
 from automation_handlers import AutomationFeatures
 from assistant_hub import AssistantHub
 from assistant_recall import retrieve_history
+from natural_commands import NaturalCommands, VOICE_HELP
 from outbound_policy import OutboundAuthorization
 from account_identity import CONFIRMED_ACCOUNTS, configure_admin, seed_identities, expected_identity, pin_identity, identity_instruction
 from dialogue_archive import DialogueArchive, ArchiveIncoming, ArchiveOutgoing, recall_query, preference_update, apply_preference, search_terms
@@ -1261,6 +1262,18 @@ async def edit_command(message: types.Message):
         await message.answer("Не вдалося отримати або обробити зображення. Перевір джерело й спробуй ще раз. Оригінал не змінювався.")
 
 
+@dp.message(Command("voice_help"))
+async def voice_help_command(message: types.Message):
+    if not await check_access(message):return
+    await message.answer(VOICE_HELP)
+
+
+@dp.message(Command("showself"))
+async def show_self_command(message: types.Message):
+    if not await check_access(message):return
+    await show_identity(message)
+
+
 @dp.message(Command("setself"))
 async def set_identity_command(message: types.Message):
     if not await check_access(message):
@@ -1529,7 +1542,8 @@ async def receive_voice(message: types.Message):
         except Exception as exc:
             indexed = False
             event("VOICE_INDEX_ERROR", type(exc).__name__)
-        # Do not execute transcribed commands or send private notes to web search.
+        # Archive the original transcript before interpreting reviewed commands.
+        # Never execute arbitrary slash commands or send private notes to web search.
         confirmation = f"Аудіо та повну розшифровку збережено в {FOLDERS[category]}.\n"
         if photo_id:
             confirmation += f"Опис прив’язано до фото: /photo {photo_id}\n"
@@ -1542,6 +1556,8 @@ async def receive_voice(message: types.Message):
             confirmation += "\nАрхів збережено, але додати запис до пам’яті розмови не вдалося. Він доступний через /note і /notes."
         await message.answer(confirmation)
         event("VOICE_SAVED", "Audio and transcript acknowledged; category=" + category)
+        if not photo_id and await natural_commands.handle(VoiceTextMessage(message, text), text):
+            return
         if await automation_features.try_natural(VoiceTextMessage(message, text), text):
             return
         if indexed and category == "notes" and not photo_id and voice_question(text):
@@ -1636,6 +1652,7 @@ automation_features = AutomationFeatures(dp, bot, lambda: drive_store, check_acc
 
 
 assistant_hub = AssistantHub(automation_features, read_memory, change_memory, lambda: drive_store, send_long, event)
+natural_commands = NaturalCommands(dp, check_access, event)
 
 
 search_book_catalog = register_library(dp, lambda: drive_store, check_access, change_memory, send_long, event)
@@ -1736,6 +1753,8 @@ async def handle_text(message: types.Message):
         return
 
     text = message.text.strip()
+    if await natural_commands.handle(message, text):
+        return
     if await automation_features.try_natural(message, text):
         return
 
