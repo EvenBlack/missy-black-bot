@@ -127,20 +127,60 @@ async def import_book(store,owner,data,filename,created,source='Telegram'):
     return book_id,book,len(chunks)
 
 
+def beginning_chunks(chunks):
+    """Find early prose locally; headings/legal notices are not narrative evidence."""
+    selected=[]
+    legal=re.compile(r'ISBN|©|copyright|усі права|всі права|жодна частина|авторськ(?:і|их) прав|право на переклад|all rights reserved',re.I)
+    front_heading=re.compile(r'^(?:зміст|contents|copyright|анотація|про автора|вихідні дані|передмова|передслово|від видав)',re.I)
+    for i,chunk in enumerate(chunks[:40]):
+        if front_heading.search(chunk.get('chapter','').strip()):continue
+        paragraphs=[p.strip() for p in re.split(r'\n\s*\n|\n',chunk['text']) if p.strip()]
+        prose=[]
+        for paragraph in paragraphs:
+            if legal.search(paragraph):continue
+            dialogue=bool(re.match(r'^[—–-]\s*\S',paragraph)) and len(paragraph)>35
+            sentences=len(re.findall(r'[.!?…](?:\s|$)',paragraph))
+            if dialogue or (len(paragraph)>160 and sentences>=1):prose.append(paragraph)
+        if prose:
+            selected.append({'number':i+1,'chapter':chunk.get('chapter',''),'text':'\n\n'.join(prose)})
+            if len(selected)>=3:break
+    if not selected:
+        # Never fabricate a narrative when the extraction contains only short text.
+        selected=[dict(c,number=i+1) for i,c in enumerate(chunks[:4])]
+    return selected
+
+
 class BookContextCache:
     """Short local cache scoped by owner, book hash and query; original index is durable."""
-    def __init__(self): self.values={}
+    def __init__(self):
+        self.values={}
+        self.originals={}
     async def get(self,store,owner,book_id,query):
         import time
         key=(str(owner),book_id,query[:200])
         cached=self.values.get(key)
         if cached and cached[0]>time.monotonic(): return cached[1]
         if re.search(r'на початку|початок|перш(?:их|і|ий) (?:розділ|сторін)',query,re.I):
-            pieces=await asyncio.gather(*(store.request('book_context',owner=str(owner),book_id=book_id,query='',chunk_number=n) for n in range(1,5)))
-            result=dict(pieces[0])
-            result['selection']='beginning_fragments'
-            all_chunks=[chunk for piece in pieces for chunk in piece.get('chunks',[])]
-            result['chunks']=[chunk for chunk in all_chunks if len(chunk.get('text',''))>150] or all_chunks
+            original_key=(str(owner),book_id)
+            original=self.originals.get(original_key)
+            if original and original[0]>time.monotonic():
+                book=original[1]
+            else:
+                saved=await store.request('get_book',owner=str(owner),book_id=book_id)
+                try:
+                    data=base64.b64decode(saved['content_b64'],validate=True)
+                    digest=hashlib.sha256(data).hexdigest()
+                    if len(data)>MAX_BOOK_BYTES or digest!=saved['sha256'] or digest[:24]!=book_id:
+                        raise ValueError('checksum')
+                    book=await asyncio.to_thread(parse_book,data,saved['filename'])
+                except (KeyError,TypeError,ValueError):
+                    raise MemoryUnavailable('INVALID_BOOK_ORIGINAL') from None
+                self.originals[original_key]=(time.monotonic()+1800,book)
+                while len(self.originals)>2:self.originals.pop(next(iter(self.originals)))
+            chunks=book.chunks()
+            result={'book_id':book_id,'title':book.title,'author':book.author,
+                'total_chunks':len(chunks),'selection':'beginning_narrative_candidates',
+                'chunks':beginning_chunks(chunks)}
         else:
             result=await store.request('book_context',owner=str(owner),book_id=book_id,query=query[:200])
         self.values[key]=(time.monotonic()+300,result)
