@@ -21,7 +21,7 @@ from groq import Groq
 from ddgs import DDGS
 from drive_memory import DriveMemory, MemoryUnavailable, RevisionConflict
 from photo_archive import inspect_image, archive_image, retrieve_image, retrieve_identity, MAX_ARCHIVE_BYTES
-from account_identity import CONFIRMED_ACCOUNTS, seed_identities, expected_identity, pin_identity, identity_instruction
+from account_identity import CONFIRMED_ACCOUNTS, configure_admin, seed_identities, expected_identity, pin_identity, identity_instruction
 from dialogue_archive import DialogueArchive, ArchiveIncoming, ArchiveOutgoing, recall_query, preference_update, apply_preference, search_terms
 from prompt_budget import bounded_prompt, format_book_context, model_error, book_prompt, character_answer, OUTPUT_TOKENS
 from book_library import BookContextCache
@@ -40,6 +40,7 @@ CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN")
 CLOUDFLARE_VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct"
 
 ADMIN_USERNAME = "E_n_gram"
+configure_admin(ADMIN_USERNAME, os.getenv("MISSY_ADMIN_DISPLAY_NAME", ""))
 ALLOWED_USERNAMES = {"E_n_gram", "MykhailoTa"}
 MEMORY_FILE = Path(os.getenv("MEMORY_FILE", "missy_memory.json"))
 MAX_HISTORY = 15
