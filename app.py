@@ -21,6 +21,10 @@ from groq import Groq
 from ddgs import DDGS
 from drive_memory import DriveMemory, MemoryUnavailable, RevisionConflict
 from photo_archive import inspect_image, archive_image, retrieve_image, retrieve_identity, MAX_ARCHIVE_BYTES
+from deep_research import research as run_deep_research, research_prompt, report_text, validate_summary
+import uuid
+from automation_handlers import AutomationFeatures
+from outbound_policy import OutboundAuthorization
 from account_identity import CONFIRMED_ACCOUNTS, configure_admin, seed_identities, expected_identity, pin_identity, identity_instruction
 from dialogue_archive import DialogueArchive, ArchiveIncoming, ArchiveOutgoing, recall_query, preference_update, apply_preference, search_terms
 from prompt_budget import bounded_prompt, format_book_context, model_error, book_prompt, character_answer, OUTPUT_TOKENS
@@ -70,6 +74,7 @@ user_locks = {}
 user_modes = {}
 image_edit_lock = asyncio.Semaphore(1)
 voice_lock = asyncio.Semaphore(1)
+deep_search_lock = asyncio.Semaphore(1)
 conversation_versions = {}
 book_context_cache = BookContextCache()
 DRIVE_MEMORY_URL = os.getenv("DRIVE_MEMORY_URL", "")
@@ -1166,8 +1171,9 @@ async def status_command(message: types.Message):
         memory_status += "; резервний файл " + ("налаштовано" if getattr(drive_store, "backup_ready", False) is True else "ще не налаштовано")
     voice_status = "папки Google Drive готові; розпізнавання перевіряється під час запиту" if drive_store and getattr(drive_store, "voice_ready", False) is True else "потрібне оновлення Google Apps Script"
     archives_status = "історія та бібліотека готові" if drive_store and getattr(drive_store, "archive_protocol", 0)==3 and getattr(drive_store, "history_ready", False) is True and getattr(drive_store, "books_ready", False) is True else "потрібне оновлення сховища для історії та книжок"
+    automation_status = "сховище готове; точність часу залежить від роботи хостингу" if drive_store and getattr(drive_store, "automation_ready", False) is True else "потрібне оновлення Google Apps Script"
     vision = "налаштована; потрібна перевірка запитом" if CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN else "не налаштована"
-    await message.answer(f"Бот працює.\nПам'ять: {memory_status}.\nПеревірка фото: {vision}.\nВебпошук: кілька пошукових джерел; доступність перевіряється під час запиту.\nГолосові: {voice_status}.\nАрхіви: {archives_status}.")
+    await message.answer(f"Бот працює.\nПам'ять: {memory_status}.\nПеревірка фото: {vision}.\nВебпошук: кілька пошукових джерел; доступність перевіряється під час запиту.\nГолосові: {voice_status}.\nАрхіви: {archives_status}.\nАвтоматизація: {automation_status}.")
 
 
 def command_text(message):
@@ -1534,6 +1540,8 @@ async def receive_voice(message: types.Message):
             confirmation += "\nАрхів збережено, але додати запис до пам’яті розмови не вдалося. Він доступний через /note і /notes."
         await message.answer(confirmation)
         event("VOICE_SAVED", "Audio and transcript acknowledged; category=" + category)
+        if await automation_features.try_natural(VoiceTextMessage(message, text), text):
+            return
         if indexed and category == "notes" and not photo_id and voice_question(text):
             # Keep the same per-user lock; calling text_handler here would deadlock.
             try:
@@ -1543,6 +1551,86 @@ async def receive_voice(message: types.Message):
             except Exception as exc:
                 event("VOICE_ANSWER_ERROR", type(exc).__name__)
                 await message.answer("Запис збережено, але відповісти на запитання зараз не вдалося.")
+
+
+async def deep_meta(query):
+    items=await asyncio.to_thread(lambda:DDGS(timeout=6).text(query,max_results=6,backend="brave,duckduckgo,bing,mojeek",region="ua-uk"))
+    return [{'title':i.get('title',''),'url':i.get('href',''),'snippet':i.get('body','')} for i in items]
+
+
+async def deep_ddg(query):
+    async with aiohttp.ClientSession() as session:
+        return await search_endpoint(session,'https://html.duckduckgo.com/html/',query)
+
+
+async def deep_bing(query):
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=12,connect=4)) as session:
+        async with session.get('https://www.bing.com/search',params={'q':query,'format':'rss'},headers={'User-Agent':USER_AGENT}) as response:
+            if response.status!=200:return []
+            raw=await read_search_body(response)
+            if b'<!ENTITY' in raw.upper():return []
+            root=ET.fromstring(raw)
+            return [{'title':i.findtext('title',''),'url':search_url(i.findtext('link','')),'snippet':i.findtext('description',''),'published':i.findtext('pubDate','')} for i in root.findall('./channel/item')[:6]]
+
+
+@dp.message(Command('deepsearch'))
+async def deepsearch_command(message: types.Message):
+    if not await check_access(message):return
+    query=(message.text or '').partition(' ')[2].strip()
+    if not query:
+        await message.answer('Напиши /deepsearch запит. Для людини додай публічний контекст — місто, професію або організацію, щоб не переплутати однофамільців.')
+        return
+    await message.answer('Починаю поглиблений пошук: кілька підзапитів, різні пошукові канали й перевірка доступних сторінок. Це може тривати кілька хвилин.')
+    try:
+        async with deep_search_lock:
+            async def progress(count):await message.answer(f'Знайдено унікальних джерел: {count}. Перевіряю доступні сторінки й зіставляю дані…')
+            result=await run_deep_research(query,{'metasearch':deep_meta,'duckduckgo':deep_ddg,'bing_rss':deep_bing},progress=progress)
+            if not result['sources']:
+                await message.answer('Пошукові канали не дали доступних джерел. Не можу підтвердити результат; спробуй уточнити запит або повторити пізніше.')
+                return
+            memory=await read_memory()
+            prompt=research_prompt(result,identity_instruction(memory,message))
+            try:
+                response=await asyncio.wait_for(asyncio.to_thread(groq_client.chat.completions.create,model=GROQ_MODEL,messages=prompt,temperature=0.1,**completion_options(OUTPUT_TOKENS)),timeout=35)
+                summary=clean_markdown(response.choices[0].message.content or 'Модель не сформувала висновок; джерела наведено нижче.')
+            except Exception as exc:
+                event('DEEPSEARCH_MODEL_ERROR',type(exc).__name__)
+                summary='Автоматичний аналіз недоступний. Нижче — фактично знайдені джерела без непідтверджених висновків.'
+            summary=validate_summary(summary,result)
+            report=report_text(result,summary)
+            key=uuid.uuid4().hex[:12]
+            stored=False
+            try:
+                def save(state):
+                    rows=state.setdefault('research_reports',{}).setdefault(str(message.from_user.id),[])
+                    rows.append({'id':key,'text':report[:35000],'created':result['checked_at']});rows[:]=rows[-2:]
+                await automation_features.store.change(save);stored=True
+            except Exception as exc:event('DEEPSEARCH_SAVE_ERROR',type(exc).__name__)
+            await message.answer_document(BufferedInputFile(report.encode('utf-8'),filename='research_'+key+'.txt'),caption='Звіт поглибленого пошуку з джерелами та обмеженнями.')
+            sources='\n'.join(f"[{s['number']}] {s['url']}" for s in result['sources'][:6])
+            await send_long(message,summary+'\n\nДжерела:\n'+sources+(f'\nЗбережений звіт: /research {key}' if stored else '\nЗбереження у Drive не підтверджено; повний звіт надіслано файлом.'))
+            event('DEEPSEARCH_COMPLETED',f"sources={len(result['sources'])} read={sum(s['page_read'] for s in result['sources'])}")
+    except Exception as exc:
+        event('DEEPSEARCH_ERROR',type(exc).__name__)
+        await message.answer('Не вдалося завершити поглиблений пошук. Жодних висновків без джерел не підтверджую.')
+
+
+@dp.message(Command('research'))
+async def research_command(message: types.Message):
+    if not await check_access(message):return
+    key=(message.text or '').partition(' ')[2].strip()
+    try:
+        state,_=await automation_features.store.read()
+        found=next((r for r in state.get('research_reports',{}).get(str(message.from_user.id),[]) if r['id']==key),None)
+        if not found:
+            await message.answer('У твоїх двох останніх збережених звітах такого коду немає.');return
+        await message.answer_document(BufferedInputFile(found['text'].encode('utf-8'),filename='research_'+key+'.txt'),caption='Твій збережений звіт поглибленого пошуку.')
+    except Exception as exc:
+        event('DEEPSEARCH_READ_ERROR',type(exc).__name__)
+        await message.answer('Не вдалося прочитати збережений звіт.')
+
+
+automation_features = AutomationFeatures(dp, bot, lambda: drive_store, check_access, has_access, send_long, event, None)
 
 
 search_book_catalog = register_library(dp, lambda: drive_store, check_access, change_memory, send_long, event)
@@ -1643,9 +1731,11 @@ async def handle_text(message: types.Message):
         return
 
     text = message.text.strip()
+    if await automation_features.try_natural(message, text):
+        return
 
     if text.startswith("/"):
-        await message.answer("Невідома команда. Доступні /start, /status, /photos, /photo, /edit, /notes, /note, /history, /preferences, /books та /findbook.")
+        await message.answer("Невідома команда. Доступні /start, /status, /photos, /photo, /edit, /notes, /note, /history, /preferences, /books, /findbook та /automation.")
         return
 
     uid = message.from_user.id
@@ -1996,6 +2086,9 @@ dialogue_archive = DialogueArchive(lambda: drive_store, lambda message: has_acce
 
 class EnabledHistoryIncoming(ArchiveIncoming):
     async def __call__(self, handler, event, data):
+        if isinstance(event, types.Message) and event.chat.type != 'private':
+            is_edit=getattr(data.get('event_update'),'edited_message',None) is not None
+            return await automation_features.handle_group(event,allow_commands=not is_edit)
         if not dialogue_archive_enabled():
             return await handler(event, data)
         return await super().__call__(handler, event, data)
@@ -2010,7 +2103,9 @@ class EnabledHistoryOutgoing(ArchiveOutgoing):
 
 dp.message.outer_middleware(EnabledHistoryIncoming(dialogue_archive))
 dp.edited_message.outer_middleware(EnabledHistoryIncoming(dialogue_archive))
+bot.session.middleware(OutboundAuthorization())
 bot.session.middleware(EnabledHistoryOutgoing(dialogue_archive))
+automation_features.engine.archive = dialogue_archive
 
 
 @dp.edited_message()
@@ -2053,6 +2148,8 @@ async def main():
         await bot.delete_webhook(drop_pending_updates=False)
         runner = await start_web()
         event("BOT", "MISSY STARTED")
+        automation_features.engine.start()
+        event('AUTOMATION_BACKEND','configured; awaiting successful state read' if getattr(drive_store,'automation_ready',False) else 'waiting for Apps Script update; existing bot features remain active')
 
         await dp.start_polling(
             bot,
@@ -2060,6 +2157,7 @@ async def main():
         )
 
     finally:
+        await automation_features.engine.stop()
         if runner:
             await runner.cleanup()
         await bot.session.close()

@@ -116,6 +116,10 @@ class ArchiveIncoming(BaseMiddleware):
             self.archive.logger('HISTORY_INPUT_ERROR', type(exc).__name__)
             await self.archive.warn(event)
             return  # Do not acknowledge processing when the original cannot be archived.
+        command=(event.text or '').split(maxsplit=1)[0].split('@')[0] if event.text else ''
+        if command in ('/stop_all','/cancel'):
+            # Cancellation must not wait behind a long research or book request.
+            return await handler(event,data)
         # Inputs are durably recorded before waiting. Process all commands, text,
         # voice and uploads in order for this owner; other owners remain independent.
         async with self.archive.processing_locks.setdefault(owner, asyncio.Lock()):
