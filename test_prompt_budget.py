@@ -87,3 +87,21 @@ class PromptTests(unittest.IsolatedAsyncioTestCase):
         for name in ['Остап','Марко','Петро']:self.assertIn(name,context)
         self.assertNotIn('Annotation',context)
         self.assertNotIn('Про сучасну фантастику',context)
+
+    def test_character_prompt_excludes_old_refusals_and_grounds_all_excerpts(self):
+        from prompt_budget import book_prompt,character_answer
+        context='Фрагмент 6: Початок\nПерший із чоловіків рушив уперед.\nФрагмент 7: Початок\nОстап зустрів Марка.\nФрагмент 8: Початок\nПетро підійшов до загону.'
+        history=[{'role':'assistant','content':'НЕМАЄ_ІМЕН_ПОМИЛКОВА_ВІДПОВІДЬ'},{'role':'user','content':'Хто на початку?'}]
+        prompt=book_prompt('Хто на початку?',context,'Пиши коротко',history,characters=True)
+        self.assertEqual(len(prompt),2)
+        self.assertNotIn('НЕМАЄ_ІМЕН',str(prompt))
+        answer=character_answer('{"characters":[{"name":"Остап","fragment":7},{"name":"Петро","fragment":8},{"name":"Вигаданий","fragment":7}]}',context)
+        self.assertIn('Остап',answer);self.assertIn('Петро',answer);self.assertNotIn('Вигаданий',answer)
+        self.assertNotIn('не згадуються',answer)
+        self.assertLessEqual(sum(len(x['content'].encode()) for x in prompt),6000)
+
+    def test_unstructured_contradictory_reply_is_not_forwarded_as_grounded_answer(self):
+        from prompt_budget import character_answer
+        answer=character_answer('Імен немає, але Остап є. Надішли інший уривок.','Фрагмент 7: Остап зустрів Марка.')
+        self.assertNotIn('Надішли',answer)
+        self.assertIn('не означає',answer)
