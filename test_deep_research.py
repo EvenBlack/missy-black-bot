@@ -36,3 +36,11 @@ class ResearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(canonical_url('https://user:pass@example.org/a'),'')
         self.assertEqual(canonical_url('javascript:alert(1)'),'')
         self.assertEqual(canonical_url('https://example.org/a?utm_source=x&year=2026#x'),'https://example.org/a?year=2026')
+
+    async def test_each_query_variant_contributes_when_first_query_has_many_results(self):
+        async def search(query):
+            label='official' if 'офіційний' in query else 'timeline' if 'хронологія' in query else 'base'
+            return [{'url':f'https://{label}{i}.example/article','title':label,'snippet':'Public excerpt'} for i in range(6)]
+        result=await research('Event',{'engine':search},fetcher=AsyncMock(return_value={'title':'Page','lines':['Relevant public information.']}))
+        urls=[s['url'] for s in result['sources']]
+        self.assertTrue(any('official' in u for u in urls));self.assertTrue(any('timeline' in u for u in urls))
