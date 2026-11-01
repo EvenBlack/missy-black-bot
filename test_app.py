@@ -173,7 +173,7 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
             message = SimpleNamespace(text=text, from_user=SimpleNamespace(id=1, username='E_n_gram', first_name='Tester'), answer=AsyncMock())
             with tempfile.TemporaryDirectory() as tmp, patch.object(app, 'MEMORY_FILE',Path(tmp)/'memory.json'), patch.object(app,'web_search',AsyncMock()) as search:
                 await app.handle_text(message)
-                self.assertIn(text, app.load_memory()['user_facts']['1'][0])
+                self.assertEqual(text, app.load_memory()['user_facts']['1'][0]['text'])
                 search.assert_not_awaited()
                 self.assertIn('Записала', message.answer.await_args.args[0])
 
