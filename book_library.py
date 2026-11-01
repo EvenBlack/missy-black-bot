@@ -131,8 +131,19 @@ def beginning_chunks(chunks):
     """Find early prose locally; headings/legal notices are not narrative evidence."""
     selected=[]
     legal=re.compile(r'ISBN|©|copyright|усі права|всі права|жодна частина|авторськ(?:і|их) прав|право на переклад|all rights reserved',re.I)
-    front_heading=re.compile(r'^(?:зміст|contents|copyright|анотація|про автора|вихідні дані|передмова|передслово|від видав)',re.I)
+    front_heading=re.compile(r'^(?:зміст|contents|copyright|annotation|анотація|про автора|вихідні дані|передмова|передслово|від видав)',re.I)
+    # For dialogue-led fiction, anchor in the first sustained exchange instead
+    # of treating a prose editorial introduction as the start of the story.
+    dialogue_anchor=next((i for i,c in enumerate(chunks[:40])
+        if not front_heading.search(c.get('chapter','').strip())
+        and sum(line.lstrip().startswith(('—','–','-')) for line in c['text'].splitlines())>=2),None)
+    start=0
+    if dialogue_anchor is not None:
+        chapter=chunks[dialogue_anchor].get('chapter','')
+        start=dialogue_anchor
+        while start>0 and chunks[start-1].get('chapter','')==chapter:start-=1
     for i,chunk in enumerate(chunks[:40]):
+        if i<start:continue
         if front_heading.search(chunk.get('chapter','').strip()):continue
         paragraphs=[p.strip() for p in re.split(r'\n\s*\n|\n',chunk['text']) if p.strip()]
         prose=[]
