@@ -60,6 +60,9 @@ function setupMemory() {
       }
       props.setProperty('MISSY_IDENTITY_FOLDER_ID', images.getId());
     }
+    [['MISSY_HISTORY_FOLDER_ID','Conversation_History'],['MISSY_BOOKS_FOLDER_ID','Book_Library']].forEach(pair => {
+      if (!props.getProperty(pair[0])) props.setProperty(pair[0], childFolder_(folder, pair[1]).getId());
+    });
     Object.keys(VOICE_FOLDERS).forEach(category => {
       const key = 'MISSY_VOICE_' + category.toUpperCase() + '_ID';
       if (!props.getProperty(key)) {
@@ -112,12 +115,14 @@ function doPost(e) {
     if (!sameSecret_(request.secret, props.getProperty('MISSY_MEMORY_SECRET'))) {
       return json_({ok: false, error: 'UNAUTHORIZED'});
     }
-    if (!['get', 'put', 'archive_photo', 'get_photo', 'list_photos', 'set_identity', 'get_identity', 'store_voice', 'list_voice', 'get_voice'].includes(request.action)) return json_({ok: false, error: 'INVALID_ACTION'});
+    if (!['get', 'put', 'archive_photo', 'get_photo', 'list_photos', 'set_identity', 'get_identity', 'store_voice', 'list_voice', 'get_voice', 'append_history', 'search_history', 'store_book', 'index_book', 'list_books', 'book_context', 'get_book'].includes(request.action)) return json_({ok: false, error: 'INVALID_ACTION'});
     const fileId = props.getProperty('MISSY_MEMORY_FILE_ID');
     if (!fileId) return json_({ok: false, error: 'SETUP_REQUIRED'});
     lock = LockService.getScriptLock();
     if (!lock.tryLock(10000)) return json_({ok: false, error: 'BUSY'});
-    if (['store_voice', 'list_voice', 'get_voice'].includes(request.action)) return voiceRequest_(request, props);
+    if (['append_history','search_history'].includes(request.action)) return historyRequest_(request, props);
+    if (['store_book','index_book','list_books','book_context','get_book'].includes(request.action)) return bookRequest_(request, props);
+    if (['store_voice', 'list_voice', 'get_voice', 'append_history', 'search_history', 'store_book', 'index_book', 'list_books', 'book_context', 'get_book'].includes(request.action)) return voiceRequest_(request, props);
     if (['set_identity', 'get_identity'].includes(request.action)) {
       return identityRequest_(request, props);
     }
@@ -138,7 +143,7 @@ function doPost(e) {
       file.setContent(JSON.stringify(store));
       recovered = true;
     }
-    if (request.action === 'get') return json_({ok: true, revision: store.revision, data: store.data, backup_ready: Boolean(backupId), photo_archive_ready: Boolean(props.getProperty('MISSY_PHOTO_FOLDER_ID')), identity_ready: Boolean(props.getProperty('MISSY_IDENTITY_FOLDER_ID')), voice_protocol: 2, voice_ready: Object.keys(VOICE_FOLDERS).every(k => Boolean(props.getProperty('MISSY_VOICE_' + k.toUpperCase() + '_ID'))), recovered: recovered});
+    if (request.action === 'get') return json_({ok: true, revision: store.revision, data: store.data, backup_ready: Boolean(backupId), photo_archive_ready: Boolean(props.getProperty('MISSY_PHOTO_FOLDER_ID')), identity_ready: Boolean(props.getProperty('MISSY_IDENTITY_FOLDER_ID')), archive_protocol: 3, history_ready:Boolean(props.getProperty('MISSY_HISTORY_FOLDER_ID')), books_ready:Boolean(props.getProperty('MISSY_BOOKS_FOLDER_ID')), voice_protocol: 2, voice_ready: Object.keys(VOICE_FOLDERS).every(k => Boolean(props.getProperty('MISSY_VOICE_' + k.toUpperCase() + '_ID'))), recovered: recovered});
     if (!Number.isSafeInteger(request.expected_revision) || request.expected_revision !== store.revision) {
       return json_({ok: false, error: 'REVISION_CONFLICT'});
     }
@@ -286,6 +291,9 @@ function voiceRequest_(request, props) {
   if (request.action === 'list_voice') {
     const words = String(request.query || '').slice(0,150).toLowerCase().split(/\s+/).filter(Boolean);
     const notes = []; let unreadable = 0;
+    [['MISSY_HISTORY_FOLDER_ID','Conversation_History'],['MISSY_BOOKS_FOLDER_ID','Book_Library']].forEach(pair => {
+      if (!props.getProperty(pair[0])) props.setProperty(pair[0], childFolder_(folder, pair[1]).getId());
+    });
     Object.keys(VOICE_FOLDERS).forEach(category => {
       const files = DriveApp.getFolderById(props.getProperty('MISSY_VOICE_' + category.toUpperCase() + '_ID')).getFiles();
       while (files.hasNext()) {
@@ -363,4 +371,149 @@ function testVoiceProtocol() {
   const key = voiceKey_('a'.repeat(64), 'memories', '', 'Мій спогад — синя чашка 🇺🇦');
   if (key !== '002d773446f06f6a5737d4e0') throw new Error('VOICE_UTF8_SELF_TEST_FAILED');
   console.log('Voice UTF-8 protocol self-test passed.');
+}
+
+function childFolder_(parent, name) {
+  const found = parent.getFoldersByName(name);
+  const folder = found.hasNext() ? found.next() : parent.createFolder(name);
+  if (found.hasNext()) throw Error('Duplicate folders');
+  return folder;
+}
+function ownerFolder_(request, props, key) {
+  if (typeof request.owner !== 'string' || !/^[0-9]{1,20}$/.test(request.owner)) throw Error('Invalid owner');
+  const id = props.getProperty(key);
+  if (!id) throw Error('Archive setup required');
+  return childFolder_(DriveApp.getFolderById(id), request.owner);
+}
+function utf8Digest_(text) {
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, text, Utilities.Charset.UTF_8)
+    .map(b => ('0'+((b+256)%256).toString(16)).slice(-2)).join('');
+}
+function writeCheckedText_(folder, name, text) {
+  const old = exactPhotoFile_(folder,name);
+  const file = old || folder.createFile(name,text,MimeType.PLAIN_TEXT);
+  if (old) file.setContent(text);
+  if (file.getBlob().getDataAsString('UTF-8') !== text) throw Error('Text write failed');
+  return file;
+}
+function historyRequest_(request, props) {
+  const folder = ownerFolder_(request,props,'MISSY_HISTORY_FOLDER_ID');
+  if (request.action === 'append_history') {
+    if (typeof request.record_json !== 'string' || request.record_json.length > 200000 || typeof request.digest !== 'string' || utf8Digest_(request.record_json) !== request.digest) return json_({ok:false,error:'INVALID_HISTORY'});
+    const r = JSON.parse(request.record_json);
+    if (!r || typeof r.id !== 'string' || !/^(?:user|assistant|voice):[0-9]{1,20}(?::edit:[0-9]{1,15})?$/.test(r.id) || !['user','assistant'].includes(r.role) || typeof r.text !== 'string' || typeof r.created !== 'string' || !/^\d{4}-\d{2}-\d{2}T/.test(r.created)) return json_({ok:false,error:'INVALID_HISTORY'});
+    const day = r.created.slice(0,10);
+    // Check all day shards so a retried earlier message never becomes a duplicate.
+    let selected, content;
+    for (let n=0;n<10000;n++) {
+      const name = day+'_'+String(n).padStart(4,'0')+'.jsonl';
+      const file = exactPhotoFile_(folder,name);
+      if (!file) { if (!selected) { selected=name;content=''; } break; }
+      const text = file.getBlob().getDataAsString('UTF-8');
+      for (const line of text.split('\n').filter(Boolean)) {
+        const old = JSON.parse(line);
+        if (old.record.id === r.id) return json_({ok:old.digest===request.digest,id:r.id,digest:old.digest,error:old.digest===request.digest?undefined:'HISTORY_CONFLICT'});
+      }
+      if (text.length < 1000000) { selected=name;content=text; }
+      else { selected=null;content=null; }
+    }
+    if (!selected) throw Error('History shard limit');
+    writeCheckedText_(folder,selected,content+JSON.stringify({digest:request.digest,record:r})+'\n');
+    return json_({ok:true,id:r.id,digest:request.digest});
+  }
+  const query = String(request.query||'').slice(0,200).toLowerCase();
+  const words = query.match(/[a-zа-яіїєґ0-9]{3,}/g)||[];
+  const cursor = request.cursor === undefined ? 0 : request.cursor;
+  if (!Number.isSafeInteger(cursor)||cursor<0) return json_({ok:false,error:'INVALID_HISTORY'});
+  const iter=folder.getFiles(), files=[];
+  while(iter.hasNext()) { const f=iter.next();if (/^\d{4}-\d{2}-\d{2}_\d{4}\.jsonl$/.test(f.getName())) files.push(f); }
+  files.sort((a,b)=>b.getName().localeCompare(a.getName()));
+  const results=[];let unreadable=0;
+  for(const file of files.slice(cursor,cursor+30)) {
+    try {
+      const lines=file.getBlob().getDataAsString('UTF-8').split('\n').filter(Boolean);
+      for(const line of lines) {
+        const r=JSON.parse(line).record;
+        const text=String(r.text||'').toLowerCase();
+        const score=words.reduce((n,w)=>n+(text.includes(w.length>4?w.slice(0,-2):w)?1:0),0);
+        if (!words.length||score>0) results.push({id:r.id,created:r.created,role:r.role,text:r.text,score:score,kind:r.kind});
+      }
+    } catch(e) { unreadable++; }
+  }
+  results.sort((a,b)=>b.score-a.score||b.created.localeCompare(a.created));
+  return json_({ok:true,messages:results.slice(0,15),next_cursor:cursor+30<files.length?cursor+30:null,scanned:Math.min(30,Math.max(0,files.length-cursor)),unreadable_count:unreadable});
+}
+
+function bookRequest_(request, props) {
+  const folder=ownerFolder_(request,props,'MISSY_BOOKS_FOLDER_ID');
+  if(request.action==='list_books') {
+    const words=String(request.query||'').slice(0,150).toLowerCase().split(/\s+/).filter(Boolean);
+    const catalogFile=exactPhotoFile_(folder,'catalog.json');
+    const entries=catalogFile?JSON.parse(catalogFile.getBlob().getDataAsString('UTF-8')):[];
+    if(!Array.isArray(entries)) throw Error('Invalid book catalog');
+    const books=entries.filter(m=>m.owner===request.owner&&words.every(w=>(m.title+' '+m.author+' '+m.filename).toLowerCase().includes(w)));
+    const unreadable=0;
+    books.sort((a,b)=>b.created.localeCompare(a.created));
+    return json_({ok:true,books:books.slice(0,15),has_more:books.length>15,unreadable_count:unreadable});
+  }
+  const id=request.book_id;
+  if(typeof id!=='string'||!/^[a-f0-9]{24}$/.test(id)) return json_({ok:false,error:'INVALID_BOOK'});
+  const metaFile=exactPhotoFile_(folder,id+'.json');
+  if(request.action==='store_book') {
+    const mime={epub:'application/epub+zip',txt:'text/plain'};
+    if(!Object.prototype.hasOwnProperty.call(mime,request.ext)||typeof request.sha256!=='string'||!/^[a-f0-9]{64}$/.test(request.sha256)||request.sha256.slice(0,24)!==id||typeof request.content_b64!=='string'||request.content_b64.length>11200000||request.content_b64.length%4||!/^[A-Za-z0-9+/]*={0,2}$/.test(request.content_b64)) return json_({ok:false,error:'INVALID_BOOK'});
+    const bytes=Utilities.base64Decode(request.content_b64);
+    if(!bytes.length||bytes.length>8*1024*1024||photoDigest_(bytes)!==request.sha256) return json_({ok:false,error:'BOOK_CHECKSUM'});
+    if(metaFile) { const old=JSON.parse(metaFile.getBlob().getDataAsString('UTF-8'));if(old.owner!==request.owner||old.sha256!==request.sha256||old.ext!==request.ext) return json_({ok:false,error:'BOOK_CONFLICT'}); }
+    let binary=exactPhotoFile_(folder,id+'.'+request.ext);
+    if(!binary) binary=folder.createFile(Utilities.newBlob(bytes,mime[request.ext],id+'.'+request.ext));
+    if(photoDigest_(binary.getBlob().getBytes())!==request.sha256) return json_({ok:false,error:'BOOK_CHECKSUM'});
+    if(!metaFile) writeCheckedText_(folder,id+'.json',JSON.stringify({owner:request.owner,book_id:id,sha256:request.sha256,ext:request.ext,size:bytes.length,title:String(request.title||request.filename||'Книга').slice(0,300),author:String(request.author||'').slice(0,300),filename:String(request.filename||'book.'+request.ext).slice(0,100),created:String(request.created||new Date().toISOString()).slice(0,50),source:String(request.source||'').slice(0,500),ready:false}));
+    return json_({ok:true,book_id:id,sha256:request.sha256,size:bytes.length});
+  }
+  if(!metaFile) return json_({ok:false,error:'BOOK_NOT_FOUND'});
+  const m=JSON.parse(metaFile.getBlob().getDataAsString('UTF-8'));
+  if(m.owner!==request.owner||m.book_id!==id||!['epub','txt'].includes(m.ext)) return json_({ok:false,error:'BOOK_CONFLICT'});
+  if(request.action==='index_book') {
+    if(typeof request.index_json!=='string'||request.index_json.length>7000000||typeof request.index_digest!=='string'||utf8Digest_(request.index_json)!==request.index_digest) return json_({ok:false,error:'INVALID_BOOK_INDEX'});
+    const index=JSON.parse(request.index_json);
+    if(index.version!==1||!Array.isArray(index.chunks)||!index.chunks.length||index.chunks.length>2000||!index.chunks.every(c=>typeof c.text==='string'&&c.text.length>0&&c.text.length<=10000&&typeof c.chapter==='string'&&c.chapter.length<=200)) return json_({ok:false,error:'INVALID_BOOK_INDEX'});
+    writeCheckedText_(folder,id+'.index.json',request.index_json);
+    m.ready=true;m.index_digest=request.index_digest;m.chunks=index.chunks.length;
+    writeCheckedText_(folder,id+'.json',JSON.stringify(m));
+    const catalogFile=exactPhotoFile_(folder,'catalog.json');
+    const entries=catalogFile?JSON.parse(catalogFile.getBlob().getDataAsString('UTF-8')):[];
+    if(!Array.isArray(entries)) throw Error('Invalid book catalog');
+    const updated=entries.filter(x=>x.book_id!==id);
+    updated.push({owner:m.owner,book_id:id,title:m.title,author:m.author,filename:m.filename,chunks:m.chunks,created:m.created});
+    writeCheckedText_(folder,'catalog.json',JSON.stringify(updated));
+    return json_({ok:true,book_id:id,index_digest:m.index_digest,chunks:m.chunks});
+  }
+  if(!m.ready) return json_({ok:false,error:'BOOK_INDEX_PENDING'});
+  if(request.action==='get_book') {
+    const binary=exactPhotoFile_(folder,id+'.'+m.ext);
+    if(!binary||binary.getSize()>8*1024*1024) return json_({ok:false,error:'BOOK_NOT_FOUND'});
+    const bytes=binary.getBlob().getBytes();
+    if(photoDigest_(bytes)!==m.sha256) return json_({ok:false,error:'BOOK_CHECKSUM'});
+    return json_({ok:true,book_id:id,sha256:m.sha256,content_b64:Utilities.base64Encode(bytes),filename:m.filename});
+  }
+  const file=exactPhotoFile_(folder,id+'.index.json');
+  if(!file) return json_({ok:false,error:'BOOK_INDEX_PENDING'});
+  const raw=file.getBlob().getDataAsString('UTF-8');
+  if(utf8Digest_(raw)!==m.index_digest) return json_({ok:false,error:'BOOK_CHECKSUM'});
+  const chunks=JSON.parse(raw).chunks;
+  const query=String(request.query||'').slice(0,200).toLowerCase();
+  const words=query.match(/[a-zа-яіїєґ0-9]{3,}/g)||[];
+  const overview=!words.length||/підсум|огляд|сюжет|короткий зміст|про що|summary|overview/.test(query);
+  let selected;
+  if(Number.isSafeInteger(request.chunk_number)) {
+    const n=request.chunk_number-1;
+    selected=n>=0&&n<chunks.length?[{number:n+1,chapter:chunks[n].chapter,text:chunks[n].text}]:[];
+  } else if(overview) {
+    const indices=[...new Set(Array.from({length:Math.min(8,chunks.length)},(_,i)=>Math.floor(i*(chunks.length-1)/Math.max(1,Math.min(8,chunks.length)-1))))];
+    selected=indices.map(i=>({number:i+1,chapter:chunks[i].chapter,text:chunks[i].text.slice(0,2200)}));
+  } else {
+    selected=chunks.map((c,i)=>({number:i+1,chapter:c.chapter,text:c.text,score:words.reduce((n,w)=>n+((c.chapter+' '+c.text).toLowerCase().includes(w)?1:0),0)})).filter(c=>c.score>0).sort((a,b)=>b.score-a.score||a.number-b.number).slice(0,5);
+  }
+  return json_({ok:true,book_id:id,title:m.title,author:m.author,index_digest:m.index_digest,total_chunks:chunks.length,selection:overview?'sampled_overview':'keyword_matches',chunks:selected});
 }
