@@ -1,10 +1,10 @@
 // Offline endpoint checks; no Google API calls or real credentials.
-const fs=require('fs'), vm=require('vm'), assert=require('assert');
+const fs=require('fs'), vm=require('vm'), assert=require('assert'), crypto=require('crypto');
 const props=new Map(),files=new Map();let nextId=0;
 function makeFile(name,text){const id=String(++nextId);const f={name,text,getId:()=>id,getBlob:()=>({getDataAsString:()=>f.text}),setContent:s=>{f.text=s;}};files.set(id,f);return f;}
 const folder={getFoldersByName:()=>({hasNext:()=>false}),createFolder:()=>({getId:()=> 'test-archive-folder'}),getName:()=> 'test',getFilesByName:name=>{const list=[...files.values()].filter(f=>f.name===name);let i=0;return{hasNext:()=>i<list.length,next:()=>list[i++]};},createFile:makeFile};
 const lock={waitLock(){},tryLock:()=>true,releaseLock(){},hasLock:()=>true};
-const c={console:{log(){}},LockService:{getScriptLock:()=>lock},PropertiesService:{getScriptProperties:()=>({getProperty:k=>props.get(k),setProperty:(k,v)=>props.set(k,v)})},DriveApp:{getFolderById:()=>folder,getFileById:id=>{if(!files.has(id))throw Error('missing');return files.get(id);}},Utilities:{getUuid:()=> 'fake-test-key'},MimeType:{PLAIN_TEXT:'text/plain'},ContentService:{MimeType:{JSON:'json'},createTextOutput:s=>({setMimeType:()=>JSON.parse(s)})}};
+const c={console:{log(){}},LockService:{getScriptLock:()=>lock},PropertiesService:{getScriptProperties:()=>({getProperty:k=>props.get(k),setProperty:(k,v)=>props.set(k,v)})},DriveApp:{getFolderById:()=>folder,getFileById:id=>{if(!files.has(id))throw Error('missing');return files.get(id);}},Utilities:{getUuid:()=> 'fake-test-key',Charset:{UTF_8:'utf8'},DigestAlgorithm:{SHA_256:'sha256'},computeDigest:(_,value,charset)=>{assert.equal(charset,'utf8');return [...crypto.createHash('sha256').update(value,'utf8').digest()].map(b=>b>127?b-256:b);}},MimeType:{PLAIN_TEXT:'text/plain'},ContentService:{MimeType:{JSON:'json'},createTextOutput:s=>({setMimeType:()=>JSON.parse(s)})}};
 vm.createContext(c);vm.runInContext(fs.readFileSync(__dirname+'/Memory.gs','utf8'),c);
 c.setupMemory();c.setupMemory();assert.equal(files.size,2);
 const secret=props.get('MISSY_MEMORY_SECRET'), main=files.get(props.get('MISSY_MEMORY_FILE_ID')),backup=files.get(props.get('MISSY_BACKUP_FILE_ID'));

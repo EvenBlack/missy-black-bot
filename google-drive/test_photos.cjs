@@ -3,7 +3,7 @@ let n=0;const files=new Map(),folders=new Map(),props=new Map();
 function iterator(list){let i=0;return{hasNext:()=>i<list.length,next:()=>list[i++]};}
 function makeFolder(){const id='folder-'+(++n),children=[];const folder={getId:()=>id,getName:()=> 'test',getFoldersByName:name=>iterator(children.filter(f=>f.folderName===name)),createFolder:name=>{const f=makeFolder();f.folderName=name;children.push(f);return f;},getFilesByName:name=>iterator(children.filter(f=>f.getName&&f.getName()===name)),getFiles:()=>iterator(children.filter(f=>f.getName)),createFile:(name,text)=>{let bytes;if(typeof name==='object'){bytes=Buffer.from(name.bytes);name=name.name;}else bytes=Buffer.from(text);const fid='file-'+(++n);const f={getId:()=>fid,getName:()=>name,getSize:()=>bytes.length,getBlob:()=>({getBytes:()=>[...bytes],getContentType:()=> 'image/png',getDataAsString:()=>bytes.toString()}),setContent:s=>{bytes=Buffer.from(s);}};children.push(f);files.set(fid,f);return f;}};folders.set(id,folder);return folder;}
 const root=makeFolder(),lock={waitLock(){},tryLock:()=>true,releaseLock(){},hasLock:()=>true};
-const c={console:{log(){}},LockService:{getScriptLock:()=>lock},PropertiesService:{getScriptProperties:()=>({getProperty:k=>props.get(k),setProperty:(k,v)=>props.set(k,v)})},DriveApp:{getFolderById:id=>folders.get(id)||root,getFileById:id=>files.get(id)},Utilities:{getUuid:()=> 'fake-test-key',DigestAlgorithm:{SHA_256:'sha256'},computeDigest:(_,bytes)=>[...crypto.createHash('sha256').update(Buffer.from(bytes)).digest()],base64Decode:s=>[...Buffer.from(s,'base64')],base64Encode:bytes=>Buffer.from(bytes).toString('base64'),newBlob:(bytes,mime,name)=>({bytes,mime,name})},MimeType:{PLAIN_TEXT:'text/plain'},ContentService:{MimeType:{JSON:'json'},createTextOutput:s=>({setMimeType:()=>JSON.parse(s)})}};
+const c={console:{log(){}},LockService:{getScriptLock:()=>lock},PropertiesService:{getScriptProperties:()=>({getProperty:k=>props.get(k),setProperty:(k,v)=>props.set(k,v)})},DriveApp:{getFolderById:id=>folders.get(id)||root,getFileById:id=>files.get(id)},Utilities:{getUuid:()=> 'fake-test-key',Charset:{UTF_8:'utf8'},DigestAlgorithm:{SHA_256:'sha256'},computeDigest:(_,bytes,charset)=>{if(typeof bytes==='string')assert.equal(charset,'utf8','Text digests must specify UTF-8 explicitly');return [...crypto.createHash('sha256').update(Buffer.from(bytes)).digest()].map(b=>b>127?b-256:b);},base64Decode:s=>[...Buffer.from(s,'base64')],base64Encode:bytes=>Buffer.from(bytes).toString('base64'),newBlob:(bytes,mime,name)=>({bytes,mime,name})},MimeType:{PLAIN_TEXT:'text/plain'},ContentService:{MimeType:{JSON:'json'},createTextOutput:s=>({setMimeType:()=>JSON.parse(s)})}};
 vm.createContext(c);vm.runInContext(fs.readFileSync(__dirname+'/Memory.gs','utf8'),c);
 c.setupMemory();c.setupMemory();assert.equal(folders.size,6);assert.equal(files.size,2);
 const secret=props.get('MISSY_MEMORY_SECRET');const call=r=>c.doPost({postData:{contents:JSON.stringify({...r,secret})}});
@@ -55,8 +55,8 @@ assert.equal(call({action:'get_voice',owner:'10',category:'memories',note_id:voi
 assert.equal(call({action:'get_voice',owner:'11',category:'memories',note_id:voice.note_id}).error,'VOICE_NOT_FOUND');
 assert.equal(call({action:'list_voice',owner:'10',query:'море'}).notes.length,1);
 assert.equal(call({action:'list_voice',owner:'11',query:'море'}).notes.length,0);
-assert.equal(call({...voice,transcript:'changed'}).error,'INVALID_VOICE');
-assert.equal(call({...voice,sha256:'a'.repeat(64)}).error,'INVALID_VOICE');
+assert.equal(call({...voice,transcript:'changed'}).error,'VOICE_KEY_MISMATCH');
+assert.equal(call({...voice,sha256:'a'.repeat(64)}).error,'VOICE_KEY_MISMATCH');
 const vf=folders.get(props.get('MISSY_VOICE_MEMORIES_ID'));
 assert.equal(vf.folderName,'Voice_Memories');
 assert.equal(vf.getFilesByName('10_'+voice.note_id+'.ogg').next().getBlob().getDataAsString(),audio.toString());
@@ -77,3 +77,6 @@ const retry=voicePayload('notes','Точна нотатка');
 assert.equal(call(retry).error,'STORAGE_ERROR');voiceCount=files.size;
 assert.equal(call(retry).note_id,retry.note_id);assert.equal(files.size,voiceCount+1);
 console.log('Voice checks passed: Latin folders, original audio/transcript, user isolation, idempotence, search, tamper rejection, photo description and partial-write retry.');
+
+const unicode=voicePayload('notes','Український текст 🇺🇦\nНовий рядок');assert.equal(call(unicode).note_id,unicode.note_id);
+assert.equal(call({...unicode,content_b64:Buffer.from('changed bytes').toString('base64')}).error,'VOICE_AUDIO_CHECKSUM');

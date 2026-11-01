@@ -188,6 +188,7 @@ async def initialize_memory():
         event("MEMORY_BACKEND", "Google Drive connected and initialized")
         event("MEMORY_BACKUP", "ready" if getattr(drive_store, "backup_ready", False) is True else "script update required")
         event("PHOTO_ARCHIVE", "ready" if getattr(drive_store, "photo_archive_ready", False) is True else "script update required")
+        event("VOICE_ARCHIVE", "ready (UTF-8 protocol 2)" if getattr(drive_store, "voice_ready", False) is True and getattr(drive_store, "voice_protocol", 0) == 2 else "script update required")
 
 
 async def change_memory(callback):

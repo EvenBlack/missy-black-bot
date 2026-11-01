@@ -32,6 +32,7 @@ class DriveMemory:
         self.backup_ready = False
         self.photo_archive_ready = False
         self.voice_ready = False
+        self.voice_protocol = 0
         self.recovered = False
 
     async def request(self, action, **fields):
@@ -70,7 +71,7 @@ class DriveMemory:
         if not isinstance(result, dict) or result.get('ok') is not True:
             if isinstance(result, dict) and result.get('error') == 'REVISION_CONFLICT':
                 raise RevisionConflict('REVISION_CONFLICT')
-            safe_errors = {'UNAUTHORIZED', 'SETUP_REQUIRED', 'STORAGE_ERROR', 'POST_REQUIRED', 'BUSY', 'INVALID_ACTION', 'INVALID_DATA', 'MEMORY_TOO_LARGE', 'INVALID_REQUEST', 'BACKUP_UNAVAILABLE', 'BACKUP_SETUP_REQUIRED', 'ARCHIVE_SETUP_REQUIRED', 'INVALID_PHOTO', 'PHOTO_NOT_FOUND', 'PHOTO_CONFLICT', 'IDENTITY_SETUP_REQUIRED', 'IDENTITY_NOT_SET', 'VOICE_SETUP_REQUIRED', 'INVALID_VOICE', 'VOICE_CONFLICT', 'VOICE_NOT_FOUND'}
+            safe_errors = {'UNAUTHORIZED', 'SETUP_REQUIRED', 'STORAGE_ERROR', 'POST_REQUIRED', 'BUSY', 'INVALID_ACTION', 'INVALID_DATA', 'MEMORY_TOO_LARGE', 'INVALID_REQUEST', 'BACKUP_UNAVAILABLE', 'BACKUP_SETUP_REQUIRED', 'ARCHIVE_SETUP_REQUIRED', 'INVALID_PHOTO', 'PHOTO_NOT_FOUND', 'PHOTO_CONFLICT', 'IDENTITY_SETUP_REQUIRED', 'IDENTITY_NOT_SET', 'VOICE_SETUP_REQUIRED', 'INVALID_VOICE', 'VOICE_CONFLICT', 'VOICE_NOT_FOUND', 'VOICE_KEY_MISMATCH', 'VOICE_AUDIO_SIZE', 'VOICE_AUDIO_CHECKSUM'}
             code = result.get('error') if isinstance(result, dict) else None
             raise MemoryUnavailable('MEMORY_' + code if isinstance(code, str) and code in safe_errors else 'MEMORY_REQUEST_REJECTED')
         revision = result.get('revision')
@@ -85,6 +86,7 @@ class DriveMemory:
         self.backup_ready = result.get('backup_ready') is True
         self.photo_archive_ready = result.get('photo_archive_ready') is True
         self.voice_ready = result.get('voice_ready') is True
+        self.voice_protocol = result.get('voice_protocol', 0)
         self.recovered = result.get('recovered') is True
         data = result['data']
         if data is not None:
