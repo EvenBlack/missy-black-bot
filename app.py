@@ -1156,6 +1156,10 @@ async def status_command(message: types.Message):
     await message.answer(f"Бот працює.\nПам'ять: {memory_status}.\nПеревірка фото: {vision}.\nВебпошук: кілька пошукових джерел; доступність перевіряється під час запиту.")
 
 
+def command_text(message):
+    return getattr(message, "text", None) or getattr(message, "caption", None) or ""
+
+
 EDIT_HELP = (
     "Відповідай на фото або зображення-файл командою:\n"
     "/edit світліше\n/edit темніше\n/edit тепліше\n/edit контраст 1.2\n"
@@ -1170,7 +1174,7 @@ EDIT_HELP = (
 async def edit_command(message: types.Message):
     if not await check_access(message):
         return
-    arguments=message.text.partition(" ")[2].strip()
+    arguments=command_text(message).partition(" ")[2].strip()
     if not arguments:
         await message.answer(EDIT_HELP)
         return
@@ -1183,7 +1187,9 @@ async def edit_command(message: types.Message):
     except EditError as exc:
         await message.answer(str(exc))
         return
-    reply=message.reply_to_message
+    reply=getattr(message, "reply_to_message", None)
+    if reply is None and (getattr(message, "document", None) or getattr(message, "photo", None)):
+        reply=message
     if not own_image and not from_archive and not (reply and (reply.document or reply.photo)):
         await message.answer("Вибери фото через «Відповісти» або скористайся /edit себе світліше.\n\n"+EDIT_HELP)
         return
@@ -1240,7 +1246,7 @@ async def set_identity_command(message: types.Message):
     if (message.from_user.username or "").casefold() != ADMIN_USERNAME.casefold():
         await message.answer("Основний образ може вибрати лише адміністратор.")
         return
-    archive_id = message.text.partition(" ")[2].strip()
+    archive_id = command_text(message).partition(" ")[2].strip()
     if not re.fullmatch(r"[a-f0-9]{24}", archive_id):
         await message.answer("Надішли /setself і код свого фото з /photos.")
         return
@@ -1279,7 +1285,7 @@ async def show_identity(message):
 async def photos_command(message: types.Message):
     if not await check_access(message):
         return
-    await list_archived_photos(message, message.text.partition(" ")[2])
+    await list_archived_photos(message, command_text(message).partition(" ")[2])
 
 
 async def list_archived_photos(message, query=""):
@@ -1311,7 +1317,7 @@ async def list_archived_photos(message, query=""):
 async def photo_command(message: types.Message):
     if not await check_access(message):
         return
-    archive_id = message.text.partition(" ")[2].strip()
+    archive_id = command_text(message).partition(" ")[2].strip()
     if not re.fullmatch(r"[a-f0-9]{24}", archive_id):
         await message.answer("Вибери фото через /photos і надішли наведену команду /photo з його кодом.")
         return

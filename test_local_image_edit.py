@@ -101,4 +101,21 @@ class EditHandlerTests(unittest.IsolatedAsyncioTestCase):
             await app.edit_command(message);store.request.assert_not_awaited()
         self.assertIn('/edit світліше',message.answer.await_args.args[0])
 
+
+
+class CaptionCommandTests(unittest.IsolatedAsyncioTestCase):
+    async def test_edit_caption_uses_attached_image(self):
+        import app
+        source=make_image()
+        async def download(media,destination,timeout):destination.write(source)
+        message=SimpleNamespace(from_user=SimpleNamespace(id=7,username='E_n_gram'),text=None,caption='/edit світліше',reply_to_message=None,document=SimpleNamespace(file_size=len(source)),photo=None,date=datetime.now(timezone.utc),bot=SimpleNamespace(download=AsyncMock(side_effect=download)),answer=AsyncMock(),answer_document=AsyncMock())
+        with patch.object(app,'drive_store',None):await app.edit_command(message)
+        self.assertGreater(pixel(message.answer_document.await_args.args[0].data)[0],100)
+
+    def test_command_text_accepts_text_caption_or_neither(self):
+        import app
+        self.assertEqual(app.command_text(SimpleNamespace(text=None,caption='/photos')),'/photos')
+        self.assertEqual(app.command_text(SimpleNamespace(text='/edit',caption=None)),'/edit')
+        self.assertEqual(app.command_text(SimpleNamespace(text=None,caption=None)),'')
+
 if __name__=='__main__':unittest.main()
