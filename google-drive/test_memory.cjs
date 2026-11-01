@@ -6,7 +6,7 @@ const folder={getFoldersByName:()=>({hasNext:()=>false}),createFolder:()=>({getI
 const lock={waitLock(){},tryLock:()=>true,releaseLock(){},hasLock:()=>true};
 const c={console:{log(){}},LockService:{getScriptLock:()=>lock},PropertiesService:{getScriptProperties:()=>({getProperty:k=>props.get(k),setProperty:(k,v)=>props.set(k,v)})},DriveApp:{getFolderById:()=>folder,getFileById:id=>{if(!files.has(id))throw Error('missing');return files.get(id);}},Utilities:{getUuid:()=> 'fake-test-key',Charset:{UTF_8:'utf8'},DigestAlgorithm:{SHA_256:'sha256'},computeDigest:(_,value,charset)=>{assert.equal(charset,'utf8');return [...crypto.createHash('sha256').update(value,'utf8').digest()].map(b=>b>127?b-256:b);}},MimeType:{PLAIN_TEXT:'text/plain'},ContentService:{MimeType:{JSON:'json'},createTextOutput:s=>({setMimeType:()=>JSON.parse(s)})}};
 vm.createContext(c);vm.runInContext(fs.readFileSync(__dirname+'/Memory.gs','utf8'),c);
-c.setupMemory();c.setupMemory();assert.equal(files.size,2);
+c.setupMemory();c.setupMemory();assert.equal(files.size,4);
 const secret=props.get('MISSY_MEMORY_SECRET'), main=files.get(props.get('MISSY_MEMORY_FILE_ID')),backup=files.get(props.get('MISSY_BACKUP_FILE_ID'));
 const call=r=>c.doPost({postData:{contents:JSON.stringify(r)}});
 const read=()=>call({action:'get',secret});
