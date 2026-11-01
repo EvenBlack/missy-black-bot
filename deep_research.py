@@ -41,8 +41,12 @@ async def research(query,searchers,progress=None,fetcher=fetch_resource):
                 failures.append(name+': unavailable');return []
     batches=await asyncio.gather(*(search(name,fn,q) for q in queries for name,fn in searchers.items()))
     by_url={}
-    for batch in batches:
-        for item in batch:
+    # Round-robin ranked results so extra queries are not discarded behind
+    # a full first-query result set.
+    for rank in range(6):
+        for batch in batches:
+            if rank>=len(batch):continue
+            item=batch[rank]
             url=canonical_url(item.get('url',''))
             if not url:continue
             if url in by_url:
