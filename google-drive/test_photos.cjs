@@ -5,7 +5,7 @@ function makeFolder(){const id='folder-'+(++n),children=[];const folder={getId:(
 const root=makeFolder(),lock={waitLock(){},tryLock:()=>true,releaseLock(){},hasLock:()=>true};
 const c={console:{log(){}},LockService:{getScriptLock:()=>lock},PropertiesService:{getScriptProperties:()=>({getProperty:k=>props.get(k),setProperty:(k,v)=>props.set(k,v)})},DriveApp:{getFolderById:id=>folders.get(id)||root,getFileById:id=>files.get(id)},Utilities:{getUuid:()=> 'fake-test-key',DigestAlgorithm:{SHA_256:'sha256'},computeDigest:(_,bytes)=>[...crypto.createHash('sha256').update(Buffer.from(bytes)).digest()],base64Decode:s=>[...Buffer.from(s,'base64')],base64Encode:bytes=>Buffer.from(bytes).toString('base64'),newBlob:(bytes,mime,name)=>({bytes,mime,name})},MimeType:{PLAIN_TEXT:'text/plain'},ContentService:{MimeType:{JSON:'json'},createTextOutput:s=>({setMimeType:()=>JSON.parse(s)})}};
 vm.createContext(c);vm.runInContext(fs.readFileSync(__dirname+'/Memory.gs','utf8'),c);
-c.setupMemory();c.setupMemory();assert.equal(folders.size,3);assert.equal(files.size,2);
+c.setupMemory();c.setupMemory();assert.equal(folders.size,6);assert.equal(files.size,2);
 const secret=props.get('MISSY_MEMORY_SECRET');const call=r=>c.doPost({postData:{contents:JSON.stringify({...r,secret})}});
 const bytes=Buffer.from('sample unchanged image bytes'),sha256=crypto.createHash('sha256').update(bytes).digest('hex'),archive_id=sha256.slice(0,24);
 const upload={action:'archive_photo',owner:'7',sha256,content_b64:bytes.toString('base64'),mime:'image/png',ext:'png',filename:'original.png',caption:'Birthday beach',original:true,created:'2026-11-01T00:00:00+02:00'};
@@ -39,3 +39,41 @@ folder.getFilesByName('8_'+archive_id+'.png').next().setContent('source changed'
 assert.equal(call({action:'get_identity'}).content_b64,bytes.toString('base64'));
 assert.equal(call({action:'set_identity',owner:'100',archive_id}).error,'PHOTO_NOT_FOUND');
 console.log('Identity checks passed: Latin folder, explicit selection, idempotent copy and retrieval independent of original archive bytes.');
+
+// Voice storage: immutable transcript/audio records, search, photo links and retries.
+assert.equal(call({action:'get'}).voice_ready,true);
+const audio=Buffer.from('OggS original voice'),audioSha=crypto.createHash('sha256').update(audio).digest('hex');
+function voicePayload(category,transcript,photo_id='') {
+  const note_id=crypto.createHash('sha256').update(audioSha+'\n'+category+'\n'+photo_id+'\n'+transcript).digest('hex').slice(0,24);
+  return {action:'store_voice',owner:'10',sha256:audioSha,content_b64:audio.toString('base64'),category,transcript,photo_id,note_id,created:'2026-11-01'};
+}
+const voice=voicePayload('memories','Мій спогад про море');
+assert.equal(c.doPost({postData:{contents:JSON.stringify({...voice,secret:'bad'})}}).error,'UNAUTHORIZED');
+assert.equal(call(voice).note_id,voice.note_id);let voiceCount=files.size;
+assert.equal(call(voice).size,audio.length);assert.equal(files.size,voiceCount);
+assert.equal(call({action:'get_voice',owner:'10',category:'memories',note_id:voice.note_id}).transcript,voice.transcript);
+assert.equal(call({action:'get_voice',owner:'11',category:'memories',note_id:voice.note_id}).error,'VOICE_NOT_FOUND');
+assert.equal(call({action:'list_voice',owner:'10',query:'море'}).notes.length,1);
+assert.equal(call({action:'list_voice',owner:'11',query:'море'}).notes.length,0);
+assert.equal(call({...voice,transcript:'changed'}).error,'INVALID_VOICE');
+assert.equal(call({...voice,sha256:'a'.repeat(64)}).error,'INVALID_VOICE');
+const vf=folders.get(props.get('MISSY_VOICE_MEMORIES_ID'));
+assert.equal(vf.folderName,'Voice_Memories');
+assert.equal(vf.getFilesByName('10_'+voice.note_id+'.ogg').next().getBlob().getDataAsString(),audio.toString());
+const vt=vf.getFilesByName('10_'+voice.note_id+'.txt').next();vt.setContent('corrupted');
+assert.equal(call({action:'get_voice',owner:'10',category:'memories',note_id:voice.note_id}).error,'VOICE_CONFLICT');
+assert.equal(call(voice).error,'VOICE_CONFLICT');
+assert.equal(call({...upload,owner:'10'}).archive_id,archive_id);
+const description=voicePayload('photos','Родина на березі моря',archive_id);
+assert.equal(call(description).note_id,description.note_id);
+assert.equal(call({action:'list_photos',owner:'10',query:'родина'}).photos.length,1);
+assert(call({action:'get_photo',owner:'10',archive_id}).caption.includes('Родина'));
+assert.equal(call({...upload,owner:'10'}).archive_id,archive_id);
+assert.equal(call({action:'list_photos',owner:'10',query:'родина'}).photos.length,1);
+assert.equal(call({...description,owner:'11'}).error,'PHOTO_NOT_FOUND');
+const nf=folders.get(props.get('MISSY_VOICE_NOTES_ID')),oldCreate=nf.createFile;let once=true;
+nf.createFile=(name,...args)=>{if(once&&typeof name==='string'&&name.endsWith('.json')){once=false;throw Error('partial');}return oldCreate(name,...args);};
+const retry=voicePayload('notes','Точна нотатка');
+assert.equal(call(retry).error,'STORAGE_ERROR');voiceCount=files.size;
+assert.equal(call(retry).note_id,retry.note_id);assert.equal(files.size,voiceCount+1);
+console.log('Voice checks passed: Latin folders, original audio/transcript, user isolation, idempotence, search, tamper rejection, photo description and partial-write retry.');
