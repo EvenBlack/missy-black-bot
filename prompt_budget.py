@@ -61,7 +61,7 @@ def model_error(exc):
     return "Зараз не можу зв'язатися з мовною моделлю. Спробуй трохи пізніше."
 
 
-def book_prompt(question,context,preferences,history,characters=False):
+def book_prompt(question,context,preferences,history,characters=False,identity=""):
     rules=(
         'Ти Міссі/Катруся. Відповідай українською за уривками з бібліотеки. '
         '«На початку книги» означає початкові сцени, не лише перший абзац. '
@@ -77,7 +77,7 @@ def book_prompt(question,context,preferences,history,characters=False):
         )
     else:
         rules+='Відповідай на запитання, посилаючись на номери фрагментів. Якщо доказів недостатньо, поясни межі відповіді.'
-    return bounded_prompt(rules,question,[('Побажання',preferences,350),('Уривки книги',context,3300)],[] if characters else history)
+    return bounded_prompt(identity+rules,question,[('Побажання',preferences,350),('Уривки книги',context,3300)],[] if characters else history)
 
 
 def character_answer(content,context):
