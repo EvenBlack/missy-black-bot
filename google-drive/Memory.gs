@@ -59,6 +59,15 @@ function setupMemory() {
       }
       props.setProperty('MISSY_IDENTITY_FOLDER_ID', images.getId());
     }
+    Object.keys(VOICE_FOLDERS).forEach(category => {
+      const key = 'MISSY_VOICE_' + category.toUpperCase() + '_ID';
+      if (!props.getProperty(key)) {
+        const found = folder.getFoldersByName(VOICE_FOLDERS[category]);
+        const selected = found.hasNext() ? found.next() : folder.createFolder(VOICE_FOLDERS[category]);
+        if (found.hasNext()) throw new Error('Duplicate voice folders.');
+        props.setProperty(key, selected.getId());
+      }
+    });
     console.log('Setup complete. Secret is in Project Settings > Script properties. Do not paste it into chat.');
   } finally {
     lock.releaseLock();
@@ -102,11 +111,12 @@ function doPost(e) {
     if (!sameSecret_(request.secret, props.getProperty('MISSY_MEMORY_SECRET'))) {
       return json_({ok: false, error: 'UNAUTHORIZED'});
     }
-    if (!['get', 'put', 'archive_photo', 'get_photo', 'list_photos', 'set_identity', 'get_identity'].includes(request.action)) return json_({ok: false, error: 'INVALID_ACTION'});
+    if (!['get', 'put', 'archive_photo', 'get_photo', 'list_photos', 'set_identity', 'get_identity', 'store_voice', 'list_voice', 'get_voice'].includes(request.action)) return json_({ok: false, error: 'INVALID_ACTION'});
     const fileId = props.getProperty('MISSY_MEMORY_FILE_ID');
     if (!fileId) return json_({ok: false, error: 'SETUP_REQUIRED'});
     lock = LockService.getScriptLock();
     if (!lock.tryLock(10000)) return json_({ok: false, error: 'BUSY'});
+    if (['store_voice', 'list_voice', 'get_voice'].includes(request.action)) return voiceRequest_(request, props);
     if (['set_identity', 'get_identity'].includes(request.action)) {
       return identityRequest_(request, props);
     }
@@ -127,7 +137,7 @@ function doPost(e) {
       file.setContent(JSON.stringify(store));
       recovered = true;
     }
-    if (request.action === 'get') return json_({ok: true, revision: store.revision, data: store.data, backup_ready: Boolean(backupId), photo_archive_ready: Boolean(props.getProperty('MISSY_PHOTO_FOLDER_ID')), identity_ready: Boolean(props.getProperty('MISSY_IDENTITY_FOLDER_ID')), recovered: recovered});
+    if (request.action === 'get') return json_({ok: true, revision: store.revision, data: store.data, backup_ready: Boolean(backupId), photo_archive_ready: Boolean(props.getProperty('MISSY_PHOTO_FOLDER_ID')), identity_ready: Boolean(props.getProperty('MISSY_IDENTITY_FOLDER_ID')), voice_ready: Object.keys(VOICE_FOLDERS).every(k => Boolean(props.getProperty('MISSY_VOICE_' + k.toUpperCase() + '_ID'))), recovered: recovered});
     if (!Number.isSafeInteger(request.expected_revision) || request.expected_revision !== store.revision) {
       return json_({ok: false, error: 'REVISION_CONFLICT'});
     }
@@ -183,9 +193,9 @@ function photoRequest_(request, props) {
       try {
         const meta = JSON.parse(file.getBlob().getDataAsString('UTF-8'));
         if (meta.owner !== owner || !/^[a-f0-9]{24}$/.test(meta.archive_id)) continue;
-        const text = String(meta.caption || '') + ' ' + String(meta.filename || '') + ' ' + String(meta.created || '');
+        const text = String(meta.caption || '') + ' ' + String(meta.description || '') + ' ' + String(meta.filename || '') + ' ' + String(meta.created || '');
         if (query.every(word => text.toLowerCase().includes(word))) {
-          photos.push({archive_id:meta.archive_id, caption:meta.caption, filename:meta.filename, created:meta.created, original:meta.original});
+          photos.push({archive_id:meta.archive_id, caption:[meta.caption, meta.description].filter(Boolean).join(' — '), filename:meta.filename, created:meta.created, original:meta.original});
         }
       } catch (error) { unreadable += 1; }
     }
@@ -211,7 +221,7 @@ function photoRequest_(request, props) {
     const saved = binary.getBlob().getBytes();
     if (saved.length !== bytes.length || photoDigest_(saved) !== request.sha256) return json_({ok:false,error:'PHOTO_CONFLICT'});
     const meta = {owner:owner,archive_id:archiveId,sha256:request.sha256,size:bytes.length,filename:String(request.filename || 'photo.'+request.ext).slice(0,100),caption:String(request.caption || '').slice(0,1000),original:request.original===true,created:String(request.created || new Date().toISOString()).slice(0,50),ext:request.ext};
-    if (metaFile) metaFile.setContent(JSON.stringify(meta));
+    if (metaFile) { meta.description = JSON.parse(metaFile.getBlob().getDataAsString('UTF-8')).description || ''; metaFile.setContent(JSON.stringify(meta)); }
     else folder.createFile(stem + '.json', JSON.stringify(meta), MimeType.PLAIN_TEXT);
     return json_({ok:true,archive_id:archiveId,sha256:request.sha256,size:bytes.length});
   }
@@ -225,7 +235,7 @@ function photoRequest_(request, props) {
   if (!file || file.getSize() > 8*1024*1024) return json_({ok:false,error:'PHOTO_NOT_FOUND'});
   const bytes = file.getBlob().getBytes();
   if (photoDigest_(bytes) !== meta.sha256) return json_({ok:false,error:'PHOTO_CONFLICT'});
-  return json_({ok:true,content_b64:Utilities.base64Encode(bytes),sha256:meta.sha256,filename:meta.filename,caption:meta.caption});
+  return json_({ok:true,content_b64:Utilities.base64Encode(bytes),sha256:meta.sha256,filename:meta.filename,caption:[meta.caption, meta.description].filter(Boolean).join(' — ')});
 }
 
 
@@ -264,4 +274,77 @@ function identityRequest_(request, props) {
   const bytes = copy.getBlob().getBytes();
   if (photoDigest_(bytes) !== selected.sha256) return json_({ok:false,error:'PHOTO_CONFLICT'});
   return json_({ok:true,archive_id:selected.archive_id,sha256:selected.sha256,content_b64:Utilities.base64Encode(bytes),filename:selected.filename,caption:selected.caption});
+}
+
+const VOICE_FOLDERS = {memories:'Voice_Memories', notes:'Voice_Notes', photos:'Photo_Descriptions'};
+
+function voiceRequest_(request, props) {
+  const owner = request.owner;
+  if (typeof owner !== 'string' || !/^[0-9]{1,20}$/.test(owner)) return json_({ok:false,error:'INVALID_VOICE'});
+  if (!Object.keys(VOICE_FOLDERS).every(k => props.getProperty('MISSY_VOICE_' + k.toUpperCase() + '_ID'))) return json_({ok:false,error:'VOICE_SETUP_REQUIRED'});
+  if (request.action === 'list_voice') {
+    const words = String(request.query || '').slice(0,150).toLowerCase().split(/\s+/).filter(Boolean);
+    const notes = []; let unreadable = 0;
+    Object.keys(VOICE_FOLDERS).forEach(category => {
+      const files = DriveApp.getFolderById(props.getProperty('MISSY_VOICE_' + category.toUpperCase() + '_ID')).getFiles();
+      while (files.hasNext()) {
+        const file = files.next();
+        if (!file.getName().startsWith(owner + '_') || !file.getName().endsWith('.json')) continue;
+        try {
+          const m = JSON.parse(file.getBlob().getDataAsString('UTF-8'));
+          if (m.owner !== owner || m.category !== category || !/^[a-f0-9]{24}$/.test(m.note_id) || typeof m.transcript !== 'string') throw Error('Invalid note');
+          if (words.every(w => (m.transcript + ' ' + m.created).toLowerCase().includes(w))) notes.push({note_id:m.note_id,category:category,created:m.created,excerpt:m.transcript.slice(0,200)});
+        } catch (e) { unreadable += 1; }
+      }
+    });
+    notes.sort((a,b) => String(b.created).localeCompare(String(a.created)));
+    return json_({ok:true,notes:notes.slice(0,10),has_more:notes.length>10,unreadable_count:unreadable});
+  }
+  const category = request.category;
+  if (!Object.prototype.hasOwnProperty.call(VOICE_FOLDERS, category) || typeof request.note_id !== 'string' || !/^[a-f0-9]{24}$/.test(request.note_id)) return json_({ok:false,error:'INVALID_VOICE'});
+  const folder = DriveApp.getFolderById(props.getProperty('MISSY_VOICE_' + category.toUpperCase() + '_ID'));
+  const stem = owner + '_' + request.note_id;
+  const sidecar = exactPhotoFile_(folder, stem + '.json');
+  if (request.action === 'get_voice') {
+    if (!sidecar) return json_({ok:false,error:'VOICE_NOT_FOUND'});
+    const m = JSON.parse(sidecar.getBlob().getDataAsString('UTF-8'));
+    const text = exactPhotoFile_(folder, stem + '.txt');
+    if (m.owner !== owner || m.category !== category || m.note_id !== request.note_id || typeof m.transcript !== 'string' || !text || text.getBlob().getDataAsString('UTF-8') !== m.transcript) return json_({ok:false,error:'VOICE_CONFLICT'});
+    return json_({ok:true,note_id:m.note_id,category:m.category,transcript:m.transcript,created:m.created,photo_id:m.photo_id});
+  }
+  if (typeof request.transcript !== 'string' || !request.transcript.trim() || request.transcript.length > 80000 || typeof request.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(request.sha256) || typeof request.content_b64 !== 'string' || request.content_b64.length > 11200000 || request.content_b64.length % 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(request.content_b64)) return json_({ok:false,error:'INVALID_VOICE'});
+  const photoId = request.photo_id || '';
+  if ((photoId && !/^[a-f0-9]{24}$/.test(photoId)) || (category === 'photos' && !photoId) || (category !== 'photos' && photoId)) return json_({ok:false,error:'INVALID_VOICE'});
+  const key = photoDigest_(request.sha256 + '\n' + category + '\n' + photoId + '\n' + request.transcript).slice(0,24);
+  if (key !== request.note_id) return json_({ok:false,error:'INVALID_VOICE'});
+  const bytes = Utilities.base64Decode(request.content_b64);
+  if (!bytes.length || bytes.length > 8*1024*1024 || photoDigest_(bytes) !== request.sha256) return json_({ok:false,error:'INVALID_VOICE'});
+  let photoSidecar, photoMeta;
+  if (photoId) {
+    photoSidecar = exactPhotoFile_(DriveApp.getFolderById(props.getProperty('MISSY_PHOTO_FOLDER_ID')), owner + '_' + photoId + '.json');
+    if (!photoSidecar) return json_({ok:false,error:'PHOTO_NOT_FOUND'});
+    photoMeta = JSON.parse(photoSidecar.getBlob().getDataAsString('UTF-8'));
+    if (photoMeta.owner !== owner || photoMeta.archive_id !== photoId) return json_({ok:false,error:'INVALID_PHOTO'});
+  }
+  if (sidecar) {
+    const old = JSON.parse(sidecar.getBlob().getDataAsString('UTF-8'));
+    if (old.owner !== owner || old.sha256 !== request.sha256 || old.transcript !== request.transcript || old.category !== category || old.photo_id !== photoId) return json_({ok:false,error:'VOICE_CONFLICT'});
+  }
+  let binary = exactPhotoFile_(folder, stem + '.ogg');
+  if (!binary) binary = folder.createFile(Utilities.newBlob(bytes, 'audio/ogg', stem + '.ogg'));
+  if (photoDigest_(binary.getBlob().getBytes()) !== request.sha256) return json_({ok:false,error:'VOICE_CONFLICT'});
+  let text = exactPhotoFile_(folder, stem + '.txt');
+  if (!text) text = folder.createFile(stem + '.txt', request.transcript, MimeType.PLAIN_TEXT);
+  if (text.getBlob().getDataAsString('UTF-8') !== request.transcript) return json_({ok:false,error:'VOICE_CONFLICT'});
+  const meta = {owner:owner,note_id:key,sha256:request.sha256,size:bytes.length,transcript:request.transcript,category:category,photo_id:photoId,created:String(request.created || new Date().toISOString()).slice(0,50)};
+  if (!sidecar) folder.createFile(stem + '.json', JSON.stringify(meta), MimeType.PLAIN_TEXT);
+  const savedMeta = JSON.parse(exactPhotoFile_(folder, stem + '.json').getBlob().getDataAsString('UTF-8'));
+  if (savedMeta.transcript !== request.transcript || savedMeta.sha256 !== request.sha256) return json_({ok:false,error:'VOICE_CONFLICT'});
+  if (photoSidecar) {
+    photoMeta.description = 'Голосовий опис: ' + request.transcript.slice(0,4000);
+    photoMeta.description_note = category + ':' + key;
+    photoSidecar.setContent(JSON.stringify(photoMeta));
+    if (JSON.parse(photoSidecar.getBlob().getDataAsString('UTF-8')).description_note !== category + ':' + key) return json_({ok:false,error:'VOICE_CONFLICT'});
+  }
+  return json_({ok:true,note_id:key,category:category,sha256:request.sha256,size:bytes.length});
 }
