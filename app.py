@@ -1914,6 +1914,7 @@ async def handle_text(message: types.Message):
         try:
             selected = await book_context_cache.get(drive_store, uid, active_book, text)
             book_context = format_book_context(selected)
+            event("BOOK_CONTEXT", "selection=" + str(selected.get("selection", "")) + " fragments=" + ",".join(str(c.get("number")) for c in selected.get("chunks", [])))
         except Exception as exc:
             event("BOOK_CONTEXT_ERROR", type(exc).__name__)
             book_context = "Уривки обраної книги недоступні; не вигадуй її зміст."
