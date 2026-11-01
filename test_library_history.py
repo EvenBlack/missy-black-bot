@@ -217,3 +217,15 @@ class HistoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(archive.append.await_count,3)
         release.set();await asyncio.gather(first,second)
         self.assertEqual(seen,['other user','short'])
+
+    async def test_emergency_stop_is_archived_but_not_blocked_by_long_request(self):
+        archive=DialogueArchive(lambda:None,lambda m:True,MagicMock());archive.append=AsyncMock()
+        middleware=ArchiveIncoming(archive);started=asyncio.Event();release=asyncio.Event();stopped=asyncio.Event()
+        async def handler(event,data):
+            if event.text=='long request':started.set();await release.wait()
+            elif event.text=='/stop_all':stopped.set()
+        first=asyncio.create_task(middleware(handler,message(1,'long request'),{}));await started.wait()
+        await middleware(handler,message(1,'/stop_all'),{})
+        self.assertTrue(stopped.is_set());self.assertFalse(first.done())
+        self.assertEqual(archive.append.await_count,2)
+        release.set();await first
