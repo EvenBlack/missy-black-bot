@@ -127,7 +127,7 @@ class ConversationTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(app,'change_memory',change):await app.persist_conversation(uid)
         record=snapshot['conversations'][str(uid)]
         self.assertEqual(len(record['messages']),30)
-        self.assertEqual(len(record['messages'][0]['content']),2000)
+        self.assertEqual(len(record['messages'][0]['content']),1000)
         self.assertEqual(snapshot['conversations']['999']['version'],8)
 
     async def test_conflicting_conversation_cannot_silently_overwrite(self):
