@@ -135,7 +135,10 @@ def owned_lease(state,key,worker):
 
 def finish_job(state,key,worker,now,**fields):
     job=owned_lease(state,key,worker);job.update(fields)
-    if job.get('daily'):
+    if job.get('recurrence'):
+        from assistant_schedule import next_rule
+        job.update(status='ready',due=iso(next_rule(job['recurrence'],now)))
+    elif job.get('daily'):
         job.update(status='ready',due=iso(next_daily(job['daily'],now)))
     elif job.get('interval_minutes'):
         job.update(status='ready',due=iso(now+timedelta(minutes=job['interval_minutes'])))
@@ -176,6 +179,7 @@ class AutomationEngine:
                 elif job['kind'] in DRAFT_KINDS:await self.broadcast(job)
                 elif job['kind']=='site':await self.poll_site(job)
                 elif job['kind']=='digest':await self.digest(job)
+                elif job['kind'] in ('briefing','health') and getattr(self,'assistant',None):await self.assistant.run_scheduled(job)
                 else:raise AutomationError('UNKNOWN_JOB_KIND')
             except TelegramRetryAfter as exc:
                 def reschedule(state):
