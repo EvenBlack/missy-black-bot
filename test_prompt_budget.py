@@ -31,14 +31,41 @@ class PromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Досягнуто ліміту',model_error(SimpleNamespace(status_code=429)))
         self.assertIn('зв’язатися'.replace('’',"'"),model_error(Exception()))
 
-    async def test_beginning_question_fetches_first_fragments_with_owner_and_caches_them(self):
+    async def test_beginning_question_reads_verified_original_with_owner_and_caches_it(self):
+        import base64,hashlib
+        from test_library_history import epub
+        data=epub();digest=hashlib.sha256(data).hexdigest();book_id=digest[:24]
         async def request(action,**kw):
+            self.assertEqual(action,'get_book')
             self.assertEqual(kw['owner'],'7')
-            self.assertEqual(kw['book_id'],'a'*24)
-            return {'title':'Book','total_chunks':200,'chunks':[{'number':kw['chunk_number'],'chapter':'Розділ','text':'Персонаж Іван'}]}
+            self.assertEqual(kw['book_id'],book_id)
+            return {'content_b64':base64.b64encode(data).decode(),'sha256':digest,'filename':'book.epub'}
         store=SimpleNamespace(request=AsyncMock(side_effect=request));cache=BookContextCache()
-        result=await cache.get(store,7,'a'*24,'Хто на початку книги?')
-        self.assertEqual([c['number'] for c in result['chunks']],[1,2,3,4])
+        result=await cache.get(store,7,book_id,'Хто на початку книги?')
+        self.assertEqual([c['number'] for c in result['chunks']],[1,2])
         self.assertIn('Фрагмент 1',format_book_context(result))
-        await cache.get(store,7,'a'*24,'Хто на початку книги?')
-        self.assertEqual(store.request.await_count,4)
+        await cache.get(store,7,book_id,'Хто на початку книги?')
+        await cache.get(store,7,book_id,'Персонажі на початку?')
+        self.assertEqual(store.request.await_count,1)
+
+    def test_long_copyright_and_contents_do_not_hide_first_narrative(self):
+        from book_library import beginning_chunks
+        chunks=[
+            {'chapter':'Вихідні дані','text':('ISBN 123. Усі права захищено. '*500)},
+            {'chapter':'Зміст','text':('Північ. Південь. '*500)},
+            {'chapter':'Перший розділ','text':'— Кеннет, ти мене чуєш? Повертайся до загону, — сказав солдат.\n\n'+('Кеннет уважно оглянув засніжений перевал. '*20)},
+            {'chapter':'Перший розділ','text':'— Ласко, перевір дорогу попереду, бо з цією хуртовиною нічого не видно.\n'+('Ласко рушив уперед. '*20)},
+            {'chapter':'Перший розділ','text':('Другий солдат наздогнав загін і передав звістку. '*10)}]
+        selected=beginning_chunks(chunks)
+        self.assertEqual([c['number'] for c in selected],[3,4,5])
+        packed=format_book_context({'title':'Книга','selection':'beginning_narrative_candidates','chunks':selected})
+        self.assertIn('Кеннет',packed);self.assertIn('Ласко',packed)
+        self.assertIn('Фрагмент 5',packed)
+        self.assertLessEqual(len(packed.encode()),3000)
+        self.assertNotIn('ISBN',packed)
+
+    async def test_beginning_rejects_mismatched_original_checksum(self):
+        from drive_memory import MemoryUnavailable
+        store=SimpleNamespace(request=AsyncMock(return_value={'content_b64':'YWJj','sha256':'b'*64,'filename':'book.epub'}))
+        with self.assertRaisesRegex(MemoryUnavailable,'INVALID_BOOK_ORIGINAL'):
+            await BookContextCache().get(store,7,'a'*24,'На початку')
