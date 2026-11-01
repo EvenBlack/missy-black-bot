@@ -2,6 +2,7 @@
 const MISSY_FOLDER_ID = '1rNoUkxNvYh_r8_ouYxOlnIpJ4OG1mHvC';
 
 function setupMemory() {
+  testVoiceProtocol();
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
@@ -137,7 +138,7 @@ function doPost(e) {
       file.setContent(JSON.stringify(store));
       recovered = true;
     }
-    if (request.action === 'get') return json_({ok: true, revision: store.revision, data: store.data, backup_ready: Boolean(backupId), photo_archive_ready: Boolean(props.getProperty('MISSY_PHOTO_FOLDER_ID')), identity_ready: Boolean(props.getProperty('MISSY_IDENTITY_FOLDER_ID')), voice_ready: Object.keys(VOICE_FOLDERS).every(k => Boolean(props.getProperty('MISSY_VOICE_' + k.toUpperCase() + '_ID'))), recovered: recovered});
+    if (request.action === 'get') return json_({ok: true, revision: store.revision, data: store.data, backup_ready: Boolean(backupId), photo_archive_ready: Boolean(props.getProperty('MISSY_PHOTO_FOLDER_ID')), identity_ready: Boolean(props.getProperty('MISSY_IDENTITY_FOLDER_ID')), voice_protocol: 2, voice_ready: Object.keys(VOICE_FOLDERS).every(k => Boolean(props.getProperty('MISSY_VOICE_' + k.toUpperCase() + '_ID'))), recovered: recovered});
     if (!Number.isSafeInteger(request.expected_revision) || request.expected_revision !== store.revision) {
       return json_({ok: false, error: 'REVISION_CONFLICT'});
     }
@@ -315,10 +316,11 @@ function voiceRequest_(request, props) {
   if (typeof request.transcript !== 'string' || !request.transcript.trim() || request.transcript.length > 80000 || typeof request.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(request.sha256) || typeof request.content_b64 !== 'string' || request.content_b64.length > 11200000 || request.content_b64.length % 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(request.content_b64)) return json_({ok:false,error:'INVALID_VOICE'});
   const photoId = request.photo_id || '';
   if ((photoId && !/^[a-f0-9]{24}$/.test(photoId)) || (category === 'photos' && !photoId) || (category !== 'photos' && photoId)) return json_({ok:false,error:'INVALID_VOICE'});
-  const key = photoDigest_(request.sha256 + '\n' + category + '\n' + photoId + '\n' + request.transcript).slice(0,24);
-  if (key !== request.note_id) return json_({ok:false,error:'INVALID_VOICE'});
+  const key = voiceKey_(request.sha256, category, photoId, request.transcript);
+  if (key !== request.note_id) return json_({ok:false,error:'VOICE_KEY_MISMATCH'});
   const bytes = Utilities.base64Decode(request.content_b64);
-  if (!bytes.length || bytes.length > 8*1024*1024 || photoDigest_(bytes) !== request.sha256) return json_({ok:false,error:'INVALID_VOICE'});
+  if (!bytes.length || bytes.length > 8*1024*1024) return json_({ok:false,error:'VOICE_AUDIO_SIZE'});
+  if (photoDigest_(bytes) !== request.sha256) return json_({ok:false,error:'VOICE_AUDIO_CHECKSUM'});
   let photoSidecar, photoMeta;
   if (photoId) {
     photoSidecar = exactPhotoFile_(DriveApp.getFolderById(props.getProperty('MISSY_PHOTO_FOLDER_ID')), owner + '_' + photoId + '.json');
@@ -347,4 +349,18 @@ function voiceRequest_(request, props) {
     if (JSON.parse(photoSidecar.getBlob().getDataAsString('UTF-8')).description_note !== category + ':' + key) return json_({ok:false,error:'VOICE_CONFLICT'});
   }
   return json_({ok:true,note_id:key,category:category,sha256:request.sha256,size:bytes.length});
+}
+
+
+function voiceKey_(sha256, category, photoId, transcript) {
+  const text = sha256 + '\n' + category + '\n' + photoId + '\n' + transcript;
+  // Do not rely on the platform's default encoding for Ukrainian/emoji text.
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, text, Utilities.Charset.UTF_8)
+    .map(b => ('0' + ((b + 256) % 256).toString(16)).slice(-2)).join('').slice(0,24);
+}
+
+function testVoiceProtocol() {
+  const key = voiceKey_('a'.repeat(64), 'memories', '', 'Мій спогад — синя чашка 🇺🇦');
+  if (key !== '002d773446f06f6a5737d4e0') throw new Error('VOICE_UTF8_SELF_TEST_FAILED');
+  console.log('Voice UTF-8 protocol self-test passed.');
 }
