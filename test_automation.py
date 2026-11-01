@@ -337,3 +337,9 @@ class TelegramToolTests(unittest.IsolatedAsyncioTestCase):
         key=await store.change(create);await engine.tick(now)
         self.assertEqual(transport.data['jobs'][key]['error'],'MISSED_PUBLICATION_TIME')
         self.assertFalse(any(c.args[0]<0 for c in bot.send_message.call_args_list))
+
+    async def test_edited_group_command_does_not_reexecute_registration(self):
+        self.features.register_target=AsyncMock()
+        event=types.Message(message_id=77,date=utcnow(),chat=types.Chat(id=-10001,type='supergroup'),from_user=types.User(id=1,is_bot=False,first_name='Test'),text='/missy_group')
+        await self.features.handle_group(event,allow_commands=False)
+        self.features.register_target.assert_not_awaited()
