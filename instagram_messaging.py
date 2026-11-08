@@ -31,7 +31,9 @@ def create_instagram_message_handler(groq_client, model, completion_options):
     user_locks = {}
 
     async def handle(sender_id, recipient_id, text, message_id):
-        if os.getenv("INSTAGRAM_AUTO_REPLY_ENABLED", "false").lower() != "true":
+        test_phrase = os.getenv("INSTAGRAM_REPLY_TEST_PHRASE", "").strip()
+        test_mode = bool(test_phrase) and text.strip() == test_phrase
+        if not test_mode and os.getenv("INSTAGRAM_AUTO_REPLY_ENABLED", "false").lower() != "true":
             return
         if not os.getenv("INSTAGRAM_ACCESS_TOKEN"):
             logger.warning("Instagram replies enabled without configured Instagram token")
@@ -44,6 +46,13 @@ def create_instagram_message_handler(groq_client, model, completion_options):
             if len(processed) > 5000:
                 processed.clear()
                 processed.add(message_id)
+            if test_mode:
+                try:
+                    await send_instagram_text(recipient_id, sender_id, "Тест Instagram успішний! Повідомлення доставлено через Міссі Блек.")
+                    logger.info("INSTAGRAM_TEST_REPLY sent")
+                except Exception as exc:
+                    logger.error("INSTAGRAM_TEST_REPLY failed: %s", type(exc).__name__)
+                return
             history = conversations.setdefault(sender_id, [])
             messages = [
                 {"role": "system", "content": (
