@@ -53,6 +53,8 @@ async def test_morning_report_once_and_disable(monkeypatch):
         return {"username": "_tsarapka__", "followers_count": 74, "media_count": 9}
 
     await enable_report(change, 1234)
+    # Fixed-time delivery scenario, independent of the actual date on the CI runner.
+    state["instagram_morning_report"]["first_date"] = "2026-11-09"
     now = datetime(2026, 11, 9, 7, 1, tzinfo=timezone.utc)
     assert await daily_report_once(FakeBot(), read, change, now, fake_fetch)
     assert len(calls) == 1 and calls[0][0] == 1234
@@ -81,6 +83,8 @@ async def test_report_when_meta_unavailable_does_not_fabricate_count():
         sent.append((chat_id, text))
     bot.send_message = sender
     await enable_report(change, 1234)
+    # Fixed-time delivery scenario, independent of the actual date on the CI runner.
+    state["instagram_morning_report"]["first_date"] = "2026-11-09"
     assert await daily_report_once(bot, read, change,
                                    datetime(2026, 11, 9, 7, 0, tzinfo=timezone.utc),
                                    fake_fetch)
