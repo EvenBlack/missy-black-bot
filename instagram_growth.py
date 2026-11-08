@@ -209,8 +209,13 @@ async def fetch_account_overview(read_memory):
     token = os.getenv("INSTAGRAM_ACCESS_TOKEN")
     data = await read_memory()
     account_id = data.get("instagram_account_id") or os.getenv("INSTAGRAM_ACCOUNT_ID")
-    if not token or not account_id or not str(account_id).isdigit():
-        raise RuntimeError("Instagram account is not yet registered")
+    if not token:
+        raise RuntimeError("У Render не налаштований Instagram токен.")
+    if not account_id or not str(account_id).isdigit():
+        raise RuntimeError(
+            "ID сторінки поки не зареєстровано. Потрібне одне нове вхідне повідомлення "
+            "в Direct Насті: після нього підписаний webhook збереже ID."
+        )
     version = os.getenv("META_GRAPH_VERSION", "v27.0")
     url = f"https://graph.facebook.com/{version}/{account_id}"
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
@@ -218,8 +223,24 @@ async def fetch_account_overview(read_memory):
                                headers={"Authorization": f"Bearer {token}"}) as response:
             body = await response.json(content_type=None)
             if response.status >= 400 or not isinstance(body, dict):
-                log.warning("INSTAGRAM_STATS unavailable http=%s", response.status)
-                raise RuntimeError("Instagram account overview unavailable")
+                error = body.get("error", {}) if isinstance(body, dict) else {}
+                if not isinstance(error, dict):
+                    error = {}
+                code = error.get("code", "")
+                subcode = error.get("error_subcode", "")
+                log.warning("INSTAGRAM_STATS rejected http=%s code=%s subcode=%s",
+                            response.status, str(code)[:12], str(subcode)[:12])
+                if code in (10, 200, 3):
+                    raise RuntimeError(
+                        "Meta відхилила читання статистики через права доступу. "
+                        "Для Facebook Login можуть знадобитися instagram_basic і pages_read_engagement."
+                    )
+                if code == 190:
+                    raise RuntimeError("Meta відхилила токен для читання статистики (код 190).")
+                raise RuntimeError(f"Meta API повернув HTTP {response.status}, код {str(code)[:12] or 'невідомий'}.")
+            if not isinstance(body.get("followers_count"), int):
+                log.warning("INSTAGRAM_STATS followers_count_missing")
+                raise RuntimeError("Meta не повернула followers_count: перевір права акаунта і тип токена.")
             return {
                 "username": str(body.get("username", ""))[:120],
                 "followers_count": body.get("followers_count"),
