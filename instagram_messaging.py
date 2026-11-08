@@ -1,4 +1,4 @@
-"""Instagram messaging transport. Replies are opt-in and use a Page access token."""
+"""Instagram Login messaging transport. Replies are opt-in and use an Instagram access token."""
 import asyncio
 import logging
 import os
@@ -8,17 +8,16 @@ import aiohttp
 logger = logging.getLogger("instagram_messaging")
 
 
-async def send_instagram_text(recipient_id, text):
+async def send_instagram_text(ig_user_id, recipient_id, text):
     """Only send a response to an Instagram-scoped user who initiated contact."""
-    page_id = os.getenv("INSTAGRAM_PAGE_ID", "")
-    page_token = os.getenv("INSTAGRAM_PAGE_ACCESS_TOKEN", "")
-    if not page_id or not page_token:
-        raise RuntimeError("Instagram Page token and ID must be configured")
+    token = os.getenv("INSTAGRAM_ACCESS_TOKEN", "")
+    if not token or not str(ig_user_id).isdigit():
+        raise RuntimeError("Instagram Login token or Instagram account ID missing")
     api_version = os.getenv("META_GRAPH_VERSION", "v24.0")
-    url = f"https://graph.facebook.com/{api_version}/{page_id}/messages"
+    url = f"https://graph.instagram.com/{api_version}/{ig_user_id}/messages"
     payload = {"recipient": {"id": str(recipient_id)}, "message": {"text": text[:1000]}}
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
-        async with session.post(url, json=payload, headers={"Authorization": f"Bearer {page_token}"}) as response:
+        async with session.post(url, json=payload, headers={"Authorization": f"Bearer {token}"}) as response:
             if response.status >= 400:
                 logger.error("Instagram send failed: HTTP %s", response.status)
                 raise RuntimeError("Instagram API rejected message")
@@ -34,8 +33,8 @@ def create_instagram_message_handler(groq_client, model, completion_options):
     async def handle(sender_id, recipient_id, text, message_id):
         if os.getenv("INSTAGRAM_AUTO_REPLY_ENABLED", "false").lower() != "true":
             return
-        if not os.getenv("INSTAGRAM_PAGE_ID") or not os.getenv("INSTAGRAM_PAGE_ACCESS_TOKEN"):
-            logger.warning("Instagram replies enabled without configured Page credentials")
+        if not os.getenv("INSTAGRAM_ACCESS_TOKEN"):
+            logger.warning("Instagram replies enabled without configured Instagram token")
             return
         lock = user_locks.setdefault(sender_id, asyncio.Lock())
         async with lock:
@@ -69,7 +68,7 @@ def create_instagram_message_handler(groq_client, model, completion_options):
                 if not answer:
                     return
                 # Instagram API limits text; keep a single concise reply.
-                await send_instagram_text(sender_id, answer)
+                await send_instagram_text(recipient_id, sender_id, answer)
                 history.extend([
                     {"role": "user", "content": text},
                     {"role": "assistant", "content": answer[:1000]},
