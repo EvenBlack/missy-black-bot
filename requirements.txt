@@ -6,3 +6,4 @@ tzdata>=2024.1
 ddgs==9.9.0
 primp==0.15.0
 icalendar>=6.1,<7.0
+cryptography>=43,<47
