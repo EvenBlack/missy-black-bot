@@ -197,3 +197,44 @@ async def test_ai_test_prefix_isolated_and_conversational(monkeypatch):
     await handler("user1", "123456", "Nastya test: What else?", "mid4")
     await asyncio.sleep(0.04)
     assert len(sent) == 3
+
+
+@pytest.mark.asyncio
+async def test_handoff_blocks_even_explicit_test_replies(monkeypatch):
+    import asyncio
+    import copy
+    import instagram_messaging
+    from instagram_handoff import register_dialog, set_dialog_mode, allow_automatic_reply, list_dialogs
+
+    state = {}
+    async def read():
+        return copy.deepcopy(state)
+    async def write(callback):
+        callback(state)
+        return copy.deepcopy(state)
+    await register_dialog(write, read, "10101")
+    assert await allow_automatic_reply(read, "10101")
+    assert not await set_dialog_mode(write, read, "unknown", "human")
+    assert await set_dialog_mode(write, read, "10101", "human")
+    assert not await allow_automatic_reply(read, "10101")
+    assert (await list_dialogs(read))[0][1]["mode"] == "human"
+
+    monkeypatch.setenv("INSTAGRAM_REPLY_TEST_PHRASE", "Тест Міссі 004")
+    monkeypatch.setenv("INSTAGRAM_AI_TEST_PREFIX", "Nastya test:")
+    monkeypatch.setenv("INSTAGRAM_AUTO_REPLY_ENABLED", "false")
+    monkeypatch.setenv("INSTAGRAM_ACCESS_TOKEN", "fake-test-token")
+    called = []
+    async def send(*args):
+        called.append(args)
+    monkeypatch.setattr(instagram_messaging, "send_instagram_text", send)
+    handler = instagram_messaging.create_instagram_message_handler(
+        object(), "unused", lambda _: {}, read, write
+    )
+    await handler("10101", "20202", "Тест Міссі 004", "id1")
+    await handler("10101", "20202", "Nastya test: Hello", "id2")
+    await asyncio.sleep(0.05)
+    assert called == []
+    assert await set_dialog_mode(write, read, "10101", "auto")
+    await handler("10101", "20202", "Тест Міссі 004", "id3")
+    await asyncio.sleep(0.05)
+    assert len(called) == 1
