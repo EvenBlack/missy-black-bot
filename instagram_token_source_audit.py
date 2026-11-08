@@ -73,6 +73,8 @@ async def audit_instagram_token_sources(read_memory):
         return {"status": "configuration_unavailable", "stored": stored_status,
                 "render": "configured" if render_token else "absent"}
     url = f"https://graph.facebook.com/{version}/{account_id}"
+    import hmac
+    same_token = hmac.compare_digest(render_token, stored_token) if render_token and stored_token else None
     render_result = "absent" if not render_token else "not_checked"
     stored_result = stored_status
     try:
@@ -101,16 +103,8 @@ async def audit_instagram_token_sources(read_memory):
         "status": "ok",
         "render": render_result,
         "stored": stored_result,
-        "same_token": (render_token == os.getenv("INSTAGRAM_ACCESS_TOKEN", "") and
-                       render_token == _safe_match_token(state, os.getenv("META_TOKEN_ENCRYPTION_KEY", ""))
-                       if render_token and stored_status == "available" else None),
+        "same_token": same_token,
     }
-
-
-def _safe_match_token(state, encryption_key):
-    """Compare only in process. Comparison result is not a token fingerprint."""
-    _, token = _stored_oauth_token(state, encryption_key)
-    return token
 
 
 def render_token_source_audit(result):
