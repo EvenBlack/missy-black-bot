@@ -1208,7 +1208,15 @@ async def list_owner_instagram_photos(owner_id):
     return result.get("photos", [])
 
 
-install_instagram_menu(dp, bot, ADMIN_USERNAME, read_memory, change_memory, create_instagram_caption_for_menu, archive_instagram_menu_photo, list_owner_instagram_photos)
+async def get_owner_instagram_photo(owner_id, archive_id):
+    if not drive_store:
+        raise MemoryUnavailable("PHOTO_ARCHIVE_UNAVAILABLE")
+    if not re.fullmatch(r"[a-f0-9]{24}", str(archive_id)):
+        raise ValueError("Invalid archive identifier")
+    return await retrieve_image(drive_store, owner_id, archive_id)
+
+
+install_instagram_menu(dp, bot, ADMIN_USERNAME, read_memory, change_memory, create_instagram_caption_for_menu, archive_instagram_menu_photo, list_owner_instagram_photos, get_owner_instagram_photo)
 
 
 @dp.message(Command("ig_stats"))

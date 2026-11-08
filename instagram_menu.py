@@ -9,7 +9,7 @@ import logging
 
 from aiogram import F
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BufferedInputFile
 
 from instagram_growth import weekly_plan, queue_summary, fetch_account_overview, save_growth_snapshot, add_photo_draft, approve_draft, discard_draft
 from instagram_handoff import list_dialogs, set_dialog_mode
@@ -155,7 +155,7 @@ async def daily_report_loop(bot, read_memory, change_memory):
         await asyncio.sleep(40)
 
 
-def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, generate_caption=None, archive_photo=None, list_owner_photos=None):
+def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, generate_caption=None, archive_photo=None, list_owner_photos=None, get_owner_photo=None):
     awaiting_input = {}
     def authorized(user, message):
         return bool(
@@ -187,6 +187,63 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
             "\n\nНічого не опубліковано. Навіть погодження не запускає "
             "публікацію, доки автопублікатор вимкнений.",
             reply_markup=kb,
+        )
+
+    async def preview_archived_photo(message, owner_id, index):
+        """One photo at a time: visual confirmation before drafting any post."""
+        if list_owner_photos is None or get_owner_photo is None:
+            await message.answer("Перегляд фотографій поки не підключений.")
+            return
+        photos = await list_owner_photos(owner_id)
+        valid = [
+            p for p in photos
+            if isinstance(p, dict)
+            and __import__("re").fullmatch(r"[a-f0-9]{24}", str(p.get("archive_id", "")))
+        ]
+        if not valid:
+            await message.answer("У доступному архіві немає фотографій.")
+            return
+        if not isinstance(index, int) or not 0 <= index < min(len(valid), 30):
+            await message.answer("Сторінку не знайдено. Відкрий архів заново.")
+            return
+        item = valid[index]
+        archive_id = str(item["archive_id"])
+        data, filename, _ = await get_owner_photo(owner_id, archive_id)
+        if not isinstance(data, bytes) or not data or len(data) > 8 * 1024 * 1024:
+            raise ValueError("Invalid archived photo bytes")
+        # Telegram previews use a modest JPEG; the archived original is never changed.
+        from io import BytesIO
+        from PIL import Image
+        def thumbnail():
+            with Image.open(BytesIO(data)) as picture:
+                picture.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
+                if picture.mode != "RGB":
+                    picture = picture.convert("RGB")
+                out = BytesIO()
+                picture.save(out, format="JPEG", quality=78, optimize=True)
+                return out.getvalue()
+        thumb = await asyncio.to_thread(thumbnail)
+        # Only render the requested item; no public URLs or private photo data in logs.
+        nav = []
+        if index > 0:
+            nav.append(InlineKeyboardButton(text="⬅️ Попереднє", callback_data=f"igmenu:gallery:{index-1}"))
+        if index + 1 < min(len(valid), 30):
+            nav.append(InlineKeyboardButton(text="Наступне ➡️", callback_data=f"igmenu:gallery:{index+1}"))
+        keyboard_rows = [
+            [InlineKeyboardButton(text="✅ Вибрати саме це фото", callback_data="igmenu:pick:" + archive_id)]
+        ]
+        if nav:
+            keyboard_rows.append(nav)
+        keyboard_rows.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="igmenu:home")])
+        caption = (
+            f"📷 Фото {index+1} із {len(valid)}\\n"
+            f"{str(item.get('caption') or item.get('filename') or filename)[:110]}\\n"
+            "Перевір зображення перед вибором."
+        )
+        await message.answer_photo(
+            BufferedInputFile(thumb, filename="archive_preview.jpg"),
+            caption=caption,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_rows),
         )
 
     @dp.callback_query(F.data.startswith("igmenu:"))
@@ -233,25 +290,20 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
             )
         elif action == "archive":
             awaiting_input.pop(query.from_user.id, None)
-            if list_owner_photos is None:
-                await message.answer("Список фото недоступний.")
+            try:
+                await preview_archived_photo(message, query.from_user.id, 0)
+            except Exception as exc:
+                log.warning("INSTAGRAM_ARCHIVE_PREVIEW_FAILED reason=%s", type(exc).__name__)
+                await message.answer("Не вдалося показати фото з архіву. Спробуй ще раз.")
+        elif action.startswith("gallery:"):
+            value = action.partition(":")[2]
+            if not value.isdigit() or len(value) > 3:
                 return
             try:
-                photos = await list_owner_photos(query.from_user.id)
-                rows = []
-                for photo in photos[:8]:
-                    pid = str(photo.get("archive_id", ""))
-                    if not __import__("re").fullmatch(r"[a-f0-9]{24}", pid):
-                        continue
-                    label = str(photo.get("caption") or photo.get("filename") or "Фото")[:32]
-                    rows.append([InlineKeyboardButton(text="📸 " + label, callback_data="igmenu:pick:" + pid)])
-                rows.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="igmenu:home")])
-                await message.answer(
-                    "📂 Обери потрібне фото з архіву. За можливості перевір його дату й назву:",
-                    reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
-                )
-            except Exception:
-                await message.answer("Не вдалося відкрити архів фото.")
+                await preview_archived_photo(message, query.from_user.id, int(value))
+            except Exception as exc:
+                log.warning("INSTAGRAM_ARCHIVE_PREVIEW_FAILED reason=%s", type(exc).__name__)
+                await message.answer("Не вдалося відкрити це фото. Перейди до іншого або повернися в меню.")
         elif action.startswith("pick:"):
             photo_id = action.partition(":")[2]
             if not __import__("re").fullmatch(r"[a-f0-9]{24}", photo_id):
