@@ -18,6 +18,7 @@ from instagram_webhook import install_instagram_webhook
 from instagram_messaging import create_instagram_message_handler
 from instagram_handoff import list_dialogs, set_dialog_mode
 from instagram_menu import install_instagram_menu, daily_report_loop
+from instagram_media import install_instagram_media
 from instagram_growth import weekly_plan, add_draft, approve_draft, queue_summary, publisher_loop, fetch_account_overview, save_growth_snapshot
 from PIL import Image, UnidentifiedImageError
 from aiogram import Bot, Dispatcher, F, types
@@ -1615,6 +1616,7 @@ async def receive_archived_image(message, media, original):
     event("PHOTO_ARCHIVE_SAVED", "Drive bytes and metadata acknowledged")
     kind = "Файл збережено в Google Drive без зміни отриманих байтів." if original else "Зберегла в Google Drive версію фото, отриману від Telegram. Для незміненого оригіналу надсилай як файл / документ."
     await message.answer(f"{kind}\nОтримати: /photo {archive_id}\nПошук за підписом: /photos слово")
+    return archive_id
 
 
 class VoiceTextMessage:
@@ -2378,6 +2380,7 @@ async def start_web():
     app.router.add_get("/", ping)
     install_instagram_oauth(app, change_memory, drive_store is not None)
     install_instagram_webhook(app, create_instagram_message_handler(groq_client, GROQ_MODEL, completion_options, read_memory, change_memory))
+    install_instagram_media(app, read_memory, drive_store)
 
     runner = web.AppRunner(app)
     await runner.setup()
