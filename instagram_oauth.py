@@ -1,6 +1,4 @@
 """Meta Facebook Login for Business -> Instagram callback. Tokens encrypted before Drive persistence."""
-import base64
-import hashlib
 import hmac
 import os
 import secrets
@@ -27,6 +25,10 @@ def install_instagram_oauth(app, change_memory, drive_enabled):
             Fernet(key.encode())
         except (ValueError, TypeError):
             raise web.HTTPServiceUnavailable(text="Invalid encryption configuration")
+        setup_key = os.getenv("META_OAUTH_SETUP_KEY", "")
+        supplied_key = request.query.get("key", "")
+        if not setup_key or not supplied_key or not hmac.compare_digest(setup_key, supplied_key):
+            raise web.HTTPForbidden(text="Unauthorized integration setup")
         state = secrets.token_urlsafe(32)
         version = os.getenv("META_GRAPH_VERSION", "v24.0")
         params = {
