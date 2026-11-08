@@ -17,7 +17,7 @@ from instagram_oauth import install_instagram_oauth
 from instagram_webhook import install_instagram_webhook
 from instagram_messaging import create_instagram_message_handler
 from instagram_handoff import list_dialogs, set_dialog_mode
-from instagram_growth import weekly_plan, add_draft, approve_draft, queue_summary, publisher_loop
+from instagram_growth import weekly_plan, add_draft, approve_draft, queue_summary, publisher_loop, fetch_account_overview, save_growth_snapshot
 from PIL import Image, UnidentifiedImageError
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
@@ -1171,6 +1171,29 @@ def instagram_owner_private(message):
         and (message.from_user.username or "").casefold() == ADMIN_USERNAME.casefold()
         and message.chat.type == "private"
     )
+
+
+@dp.message(Command("ig_stats"))
+async def instagram_stats_command(message: types.Message):
+    if not instagram_owner_private(message):
+        return
+    try:
+        overview = await fetch_account_overview(read_memory)
+        await save_growth_snapshot(change_memory, overview)
+        data = await read_memory()
+        snapshots = data.get("instagram_growth_snapshots", {})
+        oldest = snapshots[sorted(snapshots)[0]] if snapshots else {}
+        first_count = oldest.get("followers")
+        current = overview.get("followers_count")
+        delta = f" ({current - first_count:+d} від першого вимірювання)" if isinstance(current, int) and isinstance(first_count, int) else ""
+        await message.answer(
+            f"Instagram @{overview.get('username') or 'Настя'}\\n"
+            f"Підписники: {current if current is not None else 'немає доступу'}{delta}\\n"
+            f"Дописи: {overview.get('media_count') if overview.get('media_count') is not None else 'немає доступу'}\\n"
+            "Статистику оновлено; історія зберігається щоденно."
+        )
+    except Exception:
+        await message.answer("Статистика наразі недоступна через Meta API або ще не визначено ID Instagram акаунта.")
 
 
 @dp.message(Command("ig_plan"))
