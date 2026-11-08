@@ -155,7 +155,7 @@ async def daily_report_loop(bot, read_memory, change_memory):
         await asyncio.sleep(40)
 
 
-def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, generate_caption=None, archive_photo=None):
+def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, generate_caption=None, archive_photo=None, list_owner_photos=None):
     awaiting_input = {}
     def authorized(user, message):
         return bool(
@@ -169,6 +169,25 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
         if not authorized(message.from_user, message):
             return
         await message.answer("🌿 Меню Насті й Міссі. Обери дію:", reply_markup=menu_keyboard())
+
+    async def send_photo_draft(message, archive_id, owner_id):
+        caption = (
+            "Coffee, messy curls, and crunchy autumn leaves 🍂☕🧡\n\n"
+            "Honestly, I could stay out here all day… until my coffee gets cold 😂\n\n"
+            "Are you a fall person or do you already miss summer?\n\n"
+            "#AutumnVibes #CurlyHair #CozyDays #FallOutfit #CoffeeLover"
+        )
+        draft_id = await add_photo_draft(change_memory, archive_id, owner_id, caption)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Погодити чернетку", callback_data="igmenu:approvephoto:" + draft_id)],
+            [InlineKeyboardButton(text="❌ Скасувати", callback_data="igmenu:cancelphoto:" + draft_id)],
+        ])
+        await message.answer(
+            "🖼 Чернетка №" + draft_id + "\n\n" + caption +
+            "\n\nНічого не опубліковано. Навіть погодження не запускає "
+            "публікацію, доки автопублікатор вимкнений.",
+            reply_markup=kb,
+        )
 
     @dp.callback_query(F.data.startswith("igmenu:"))
     async def handle_menu(query):
@@ -201,10 +220,52 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
             await message.answer("✍️ Напиши тему для підпису одним повідомленням — без команд. Наприклад: autumn walk and coffee.")
         elif action == "photo":
             awaiting_input[query.from_user.id] = "photo"
+            extra = []
+            if list_owner_photos is not None:
+                extra = [InlineKeyboardButton(text="📂 Обрати з уже збережених фото", callback_data="igmenu:archive")]
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [*extra] if extra else [InlineKeyboardButton(text="⬅️ Меню", callback_data="igmenu:home")],
+                [InlineKeyboardButton(text="⬅️ Меню", callback_data="igmenu:home")],
+            ]) if extra else menu_keyboard()
             await message.answer(
-                "🖼 Надішли фото Насті наступним повідомленням. Я збережу його в архіві; "
-                "публікація поки не відбудеться, доки не налаштуємо публічний URL і погодження."
+                "🖼 Надішли фото Насті наступним повідомленням або обери вже збережене в архіві.",
+                reply_markup=keyboard,
             )
+        elif action == "archive":
+            awaiting_input.pop(query.from_user.id, None)
+            if list_owner_photos is None:
+                await message.answer("Список фото недоступний.")
+                return
+            try:
+                photos = await list_owner_photos(query.from_user.id)
+                rows = []
+                for photo in photos[:8]:
+                    pid = str(photo.get("archive_id", ""))
+                    if not __import__("re").fullmatch(r"[a-f0-9]{24}", pid):
+                        continue
+                    label = str(photo.get("caption") or photo.get("filename") or "Фото")[:32]
+                    rows.append([InlineKeyboardButton(text="📸 " + label, callback_data="igmenu:pick:" + pid)])
+                rows.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="igmenu:home")])
+                await message.answer(
+                    "📂 Обери потрібне фото з архіву. За можливості перевір його дату й назву:",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+                )
+            except Exception:
+                await message.answer("Не вдалося відкрити архів фото.")
+        elif action.startswith("pick:"):
+            photo_id = action.partition(":")[2]
+            if not __import__("re").fullmatch(r"[a-f0-9]{24}", photo_id):
+                return
+            if list_owner_photos is None:
+                return
+            try:
+                photos = await list_owner_photos(query.from_user.id)
+                if not any(str(p.get("archive_id")) == photo_id for p in photos):
+                    await message.answer("Цього фото вже немає в доступному списку архіву.")
+                    return
+                await send_photo_draft(message, photo_id, query.from_user.id)
+            except Exception:
+                await message.answer("Не вдалося підготувати чернетку з архіву.")
         elif action.startswith(("approvephoto:", "cancelphoto:")):
             cmd, _, draft_id = action.partition(":")
             if not __import__("re").fullmatch(r"[a-f0-9]{8}", draft_id):
@@ -313,25 +374,6 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
                         reply_markup=menu_keyboard(),
                     )
                     return
-                caption = (
-                    "Coffee, messy curls, and crunchy autumn leaves 🍂☕🧡\\n\\n"
-                    "Honestly, I could stay out here all day… until my coffee gets cold 😂\\n\\n"
-                    "Are you a fall person or do you already miss summer?\\n\\n"
-                    "#AutumnVibes #CurlyHair #CozyDays #FallOutfit #CoffeeLover"
-                )
-                draft_id = await add_photo_draft(change_memory, archive_id, message.from_user.id, caption)
-                kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="✅ Погодити чернетку", callback_data="igmenu:approvephoto:" + draft_id)],
-                    [InlineKeyboardButton(text="❌ Скасувати", callback_data="igmenu:cancelphoto:" + draft_id)],
-                ])
-                await message.answer(
-                    "🖼 Фото збережено в приватному архіві. Підготувала чернетку №" + draft_id
-                    + "\\n\\n" + caption +
-                    "\\n\\nНічого не опубліковано. Погодження чернетки також "
-                    "не запускає публікації, доки автопублікатор вимкнено.",
-                    reply_markup=kb,
-                )
-            else:
-                await message.answer("Збереження фото ще не налаштовано.", reply_markup=menu_keyboard())
+                await send_photo_draft(message, archive_id, message.from_user.id)
         except Exception:
             await message.answer("Не вдалося зберегти фото в архів.", reply_markup=menu_keyboard())
