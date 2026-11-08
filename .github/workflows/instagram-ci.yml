@@ -6,6 +6,8 @@ on:
       - 'app.py'
       - 'requirements.txt'
       - 'tests/test_instagram_webhook.py'
+      - 'tests/test_instagram_photo_draft.py'
+      - 'tests/test_instagram_menu.py'
       - '.github/workflows/instagram-ci.yml'
   workflow_dispatch:
 
@@ -18,8 +20,8 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install test dependencies
-        run: python -m pip install 'aiohttp>=3.9,<4' 'cryptography>=43,<47' 'pytest>=8,<10' 'pytest-asyncio>=0.24,<2'
+        run: python -m pip install 'aiohttp>=3.9,<4' 'cryptography>=43,<47' 'pytest>=8,<10' 'pytest-asyncio>=0.24,<2' 'aiogram>=3.7,<4' 'Pillow>=10,<13' 'tzdata>=2024.1'
       - name: Compile Instagram integration
-        run: python -m py_compile app.py instagram_oauth.py instagram_webhook.py instagram_messaging.py
+        run: python -m py_compile app.py instagram_oauth.py instagram_webhook.py instagram_messaging.py instagram_media.py instagram_menu.py instagram_growth.py
       - name: Run isolated webhook tests
-        run: python -m pytest -q tests/test_instagram_webhook.py
+        run: python -m pytest -q tests/test_instagram_webhook.py tests/test_instagram_menu.py tests/test_instagram_photo_draft.py
