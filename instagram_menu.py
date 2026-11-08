@@ -148,7 +148,8 @@ async def daily_report_loop(bot, read_memory, change_memory):
         await asyncio.sleep(40)
 
 
-def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory):
+def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, generate_caption=None, archive_photo=None):
+    awaiting_input = {}
     def authorized(user, message):
         return bool(
             user and (user.username or "").casefold() == admin_username.casefold()
@@ -171,6 +172,7 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory):
         action = query.data.partition(":")[2]
         message = query.message
         if action == "home":
+            awaiting_input.pop(query.from_user.id, None)
             await message.answer("🌿 Меню Насті:", reply_markup=menu_keyboard())
             return
         if action == "plan":
@@ -185,16 +187,13 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory):
             except Exception:
                 await message.answer("Статистика Meta API поки недоступна. Після наступного повідомлення в Direct повтори перевірку.", reply_markup=menu_keyboard())
         elif action == "caption":
-            await message.answer(
-                "✍️ Введи тему після команди /ig_caption (приклад: /ig_caption autumn coffee selfie). "
-                "У наступному оновленні додамо введення теми без команд.",
-                reply_markup=menu_keyboard(),
-            )
+            awaiting_input[query.from_user.id] = "caption"
+            await message.answer("✍️ Напиши тему для підпису одним повідомленням — без команд. Наприклад: autumn walk and coffee.")
         elif action == "photo":
+            awaiting_input[query.from_user.id] = "photo"
             await message.answer(
-                "🖼 Надішли мені фото Насті звичайним повідомленням. Я збережу його в фотоархіві. "
-                "Автопублікація залишається вимкненою до налаштування публічного зберігання фото.",
-                reply_markup=menu_keyboard(),
+                "🖼 Надішли фото Насті наступним повідомленням. Я збережу його в архіві; "
+                "публікація поки не відбудеться, доки не налаштуємо публічний URL і погодження."
             )
         elif action == "queue":
             try:
@@ -248,3 +247,42 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory):
                     await message.answer("Діалог не знайдено.")
             except Exception:
                 await message.answer("Зберегти перемикання не вдалося.")
+
+    @dp.message(F.text, lambda m: awaiting_input.get(m.from_user.id if m.from_user else None) == "caption")
+    async def caption_input(message):
+        if not authorized(message.from_user, message):
+            return
+        awaiting_input.pop(message.from_user.id, None)
+        topic = (message.text or "").strip()[:180]
+        if not topic:
+            await message.answer("Тему не отримано.", reply_markup=menu_keyboard())
+            return
+        if generate_caption is None:
+            await message.answer("Генератор підписів поки недоступний.", reply_markup=menu_keyboard())
+            return
+        try:
+            caption = await generate_caption(topic)
+            await message.answer(
+                (caption or "Немає відповіді від генератора.") + "\\n\\nЦе чернетка, нічого не опубліковано.",
+                reply_markup=menu_keyboard(),
+            )
+        except Exception:
+            await message.answer("Зараз не вдалося створити підпис.", reply_markup=menu_keyboard())
+
+    @dp.message(F.photo, lambda m: awaiting_input.get(m.from_user.id if m.from_user else None) == "photo")
+    async def photo_input(message):
+        if not authorized(message.from_user, message):
+            return
+        awaiting_input.pop(message.from_user.id, None)
+        try:
+            if archive_photo is not None:
+                await archive_photo(message)
+                await message.answer(
+                    "🖼 Фото передано до фотоархіву Міссі. "
+                    "Це ще не Instagram-допис: потрібен публічний медіа-URL.",
+                    reply_markup=menu_keyboard(),
+                )
+            else:
+                await message.answer("Збереження фото ще не налаштовано.", reply_markup=menu_keyboard())
+        except Exception:
+            await message.answer("Не вдалося зберегти фото в архів.", reply_markup=menu_keyboard())
