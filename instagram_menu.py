@@ -11,7 +11,7 @@ from aiogram import F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BufferedInputFile
 
-from instagram_growth import weekly_plan, queue_summary, fetch_account_overview, save_growth_snapshot, add_photo_draft, approve_draft, discard_draft
+from instagram_growth import weekly_plan, queue_summary, fetch_account_overview, save_growth_snapshot, add_photo_draft, approve_draft, discard_draft, publish_one_now
 from instagram_handoff import list_dialogs, set_dialog_mode
 
 log = logging.getLogger("instagram_menu")
@@ -337,12 +337,60 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
                                          reply_markup=menu_keyboard())
             except Exception:
                 await message.answer("Не вдалося змінити чернетку. Вона могла бути вже погоджена або скасована.")
+        elif action.startswith("publishask:"):
+            draft_id = action.partition(":")[2]
+            if not __import__("re").fullmatch(r"[a-f0-9]{8}", draft_id):
+                return
+            try:
+                entries = dict(await queue_summary(read_memory))
+                item = entries.get(draft_id)
+                if (not isinstance(item, dict) or item.get("status") != "approved"
+                        or item.get("photo_owner_id") != str(query.from_user.id)):
+                    await message.answer("Публікація доступна лише для твоєї погодженої чернетки.")
+                    return
+                caption = str(item.get("caption", ""))[:1400]
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🚀 ТАК, ОПУБЛІКУВАТИ ЗАРАЗ", callback_data="igmenu:publishconfirm:" + draft_id)],
+                    [InlineKeyboardButton(text="⬅️ Ні, повернутися", callback_data="igmenu:queue")],
+                ])
+                await message.answer(
+                    "⚠️ ФІНАЛЬНЕ ПІДТВЕРДЖЕННЯ: опублікувати фото з цим підписом "
+                    "зараз у Instagram Насті?\\n\\n" + caption +
+                    "\\n\\nЦя дія справді створить публічний допис.",
+                    reply_markup=kb,
+                )
+            except Exception:
+                await message.answer("Не вдалося перевірити статус чернетки.")
+        elif action.startswith("publishconfirm:"):
+            draft_id = action.partition(":")[2]
+            if not __import__("re").fullmatch(r"[a-f0-9]{8}", draft_id):
+                return
+            await message.answer("🚀 Надсилаю лише цей погоджений допис у Meta. Повторно не натискай.")
+            try:
+                media_id = await publish_one_now(read_memory, change_memory, draft_id, query.from_user.id)
+                await message.answer(
+                    "✅ Instagram підтвердив публікацію! ID: " + str(media_id)[:70],
+                    reply_markup=menu_keyboard(),
+                )
+            except Exception as exc:
+                await message.answer(str(exc)[:400], reply_markup=menu_keyboard())
         elif action == "queue":
             try:
                 items = await queue_summary(read_memory)
                 lines = ["📋 Черга дописів:"]
-                lines += [f"{key}: {item.get('status', '?')} — {item.get('due_at', '?')}" for key, item in items[-10:]]
-                await message.answer("\n".join(lines) if items else "Черга дописів порожня.", reply_markup=menu_keyboard())
+                buttons = []
+                for key, item in items[-10:]:
+                    lines.append(f"{key}: {item.get('status', '?')} — {item.get('due_at', '?')}")
+                    if item.get("status") == "approved" and item.get("photo_owner_id") == str(query.from_user.id):
+                        buttons.append([InlineKeyboardButton(
+                            text="🚀 Опублікувати зараз · " + key,
+                            callback_data="igmenu:publishask:" + key,
+                        )])
+                buttons.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="igmenu:home")])
+                await message.answer(
+                    "\n".join(lines) if items else "Черга дописів порожня.",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+                )
             except Exception:
                 await message.answer("Черга зараз недоступна.")
         elif action == "dialogs":

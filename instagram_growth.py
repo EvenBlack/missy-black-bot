@@ -239,6 +239,61 @@ async def publish_due_once(read_memory, change_memory, publish_func=publish_imag
     return completed
 
 
+async def publish_one_now(read_memory, change_memory, draft_id, owner_id, publish_func=publish_image):
+    """Publish exactly one owner-approved draft after a dedicated confirm button.
+
+    The global automatic scheduler flag is intentionally NOT checked: it remains off.
+    Mark before network activity so a timeout cannot cause duplicate publishing.
+    Only the owner who archived the photo can authorize this operation.
+    """
+    if not isinstance(draft_id, str) or not __import__("re").fullmatch(r"[a-f0-9]{8}", draft_id):
+        raise ValueError("Invalid draft ID")
+    if not str(owner_id).isdigit():
+        raise ValueError("Invalid owner ID")
+    snapshot = await read_memory()
+    item = _entries(snapshot).get(draft_id)
+    if (not isinstance(item, dict) or item.get("status") != "approved"
+            or item.get("photo_owner_id") != str(owner_id)
+            or not item.get("image_url") or not item.get("caption")):
+        raise ValueError("Only your approved photo draft can be published")
+    account = snapshot.get("instagram_account_id") or os.getenv("INSTAGRAM_ACCOUNT_ID")
+    if not str(account or "").isdigit():
+        raise RuntimeError("Instagram account ID unavailable")
+    claimed = False
+    def claim(data):
+        nonlocal claimed
+        record = data.get("instagram_publish_queue", {}).get(draft_id)
+        if (isinstance(record, dict)
+                and record.get("status") == "approved"
+                and record.get("photo_owner_id") == str(owner_id)):
+            record["status"] = "publishing"
+            record["publish_started_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            claimed = True
+    await change_memory(claim)
+    if not claimed:
+        raise ValueError("Draft status changed; publish not attempted")
+    latest = _entries(await read_memory()).get(draft_id, {})
+    try:
+        media_id = await publish_func(latest["image_url"], latest["caption"], str(account))
+    except Exception as exc:
+        log.error("INSTAGRAM_OWNER_PUBLISH_FAILED reason=%s", type(exc).__name__)
+        # Cannot distinguish timeout after publication from failure to publish.
+        # Require manual Instagram account check; never auto retry.
+        raise RuntimeError(
+            "Meta не підтвердила публікацію. Автоматичне повторення заблоковано, "
+            "щоб уникнути дублювання. Перевір сторінку Instagram вручну."
+        ) from None
+    def finish(data):
+        record = data.get("instagram_publish_queue", {}).get(draft_id)
+        if isinstance(record, dict) and record.get("status") == "publishing":
+            record["status"] = "published"
+            record["media_id"] = media_id
+            record["published_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    await change_memory(finish)
+    log.info("INSTAGRAM_OWNER_PUBLISH_SUCCESS")
+    return media_id
+
+
 async def publisher_loop(read_memory, change_memory):
     while True:
         try:
