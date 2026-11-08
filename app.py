@@ -13,6 +13,7 @@ import xml.etree.ElementTree as ET
 
 import aiohttp
 from aiohttp import web
+from instagram_oauth import install_instagram_oauth
 from PIL import Image, UnidentifiedImageError
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
@@ -2156,6 +2157,7 @@ async def ping(request):
 async def start_web():
     app = web.Application()
     app.router.add_get("/", ping)
+    install_instagram_oauth(app, change_memory, drive_store is not None)
 
     runner = web.AppRunner(app)
     await runner.setup()
