@@ -43,3 +43,56 @@ async def test_cancellation_revokes_draft_url(monkeypatch):
     await discard_draft(change, key)
     assert state["instagram_publish_queue"][key]["status"] == "cancelled"
     assert "image_url" not in state["instagram_publish_queue"][key]
+
+
+@pytest.mark.asyncio
+async def test_explicit_owner_publish_only_once(monkeypatch):
+    from instagram_growth import publish_one_now
+    monkeypatch.setenv("META_TOKEN_ENCRYPTION_KEY", "1"*64)
+    monkeypatch.setenv("INSTAGRAM_ACCOUNT_ID", "178999888777")
+    monkeypatch.setenv("INSTAGRAM_POSTING_ENABLED", "false")
+    state = {}
+    async def read():
+        return copy.deepcopy(state)
+    async def change(fn):
+        fn(state)
+    key = await add_photo_draft(change, "a"*24, 1234, "A happy day #Fall")
+    await approve_draft(change, read, key)
+    calls = []
+    async def fake_publish(url, caption, account):
+        calls.append((url, caption, account))
+        return "17888"
+    with pytest.raises(ValueError):
+        await publish_one_now(read, change, key, 999, fake_publish)
+    assert state["instagram_publish_queue"][key]["status"] == "approved"
+    result = await publish_one_now(read, change, key, 1234, fake_publish)
+    assert result == "17888"
+    assert state["instagram_publish_queue"][key]["status"] == "published"
+    assert len(calls) == 1
+    with pytest.raises(ValueError):
+        await publish_one_now(read, change, key, 1234, fake_publish)
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_explicit_publish_failed_meta_does_not_retry(monkeypatch):
+    from instagram_growth import publish_one_now
+    monkeypatch.setenv("META_TOKEN_ENCRYPTION_KEY", "1"*64)
+    monkeypatch.setenv("INSTAGRAM_ACCOUNT_ID", "178999888777")
+    state = {}
+    async def read():
+        return copy.deepcopy(state)
+    async def change(fn):
+        fn(state)
+    key = await add_photo_draft(change, "a"*24, 1234, "Some fall vibes")
+    await approve_draft(change, read, key)
+    calls = []
+    async def fail_publish(url, caption, account):
+        calls.append(1)
+        raise RuntimeError("simulated Meta failure")
+    with pytest.raises(RuntimeError, match="повторення заблоковано"):
+        await publish_one_now(read, change, key, 1234, fail_publish)
+    assert state["instagram_publish_queue"][key]["status"] == "publishing"
+    with pytest.raises(ValueError):
+        await publish_one_now(read, change, key, 1234, fail_publish)
+    assert len(calls) == 1
