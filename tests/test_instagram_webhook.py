@@ -144,3 +144,56 @@ async def test_one_phrase_reply_without_general_auto_replies(monkeypatch):
     await handler("sender", "account", "Тест Міссі 004", "midtest")
     await asyncio.sleep(0.03)
     assert len(calls) == 1
+
+@pytest.mark.asyncio
+async def test_ai_test_prefix_isolated_and_conversational(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    import instagram_messaging
+
+    monkeypatch.setenv("INSTAGRAM_AI_TEST_PREFIX", "Nastya test:")
+    monkeypatch.setenv("INSTAGRAM_AUTO_REPLY_ENABLED", "false")
+    monkeypatch.setenv("INSTAGRAM_ACCESS_TOKEN", "unit-token")
+    monkeypatch.delenv("INSTAGRAM_REPLY_TEST_PHRASE", raising=False)
+    sent = []
+    prompts = []
+
+    async def fake_send(ig_id, sender_id, text):
+        sent.append((ig_id, sender_id, text))
+
+    def fake_completion(**kwargs):
+        prompts.append(kwargs["messages"])
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="Hey! Nice to meet you 😊"))])
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_completion)))
+    monkeypatch.setattr(instagram_messaging, "send_instagram_text", fake_send)
+    handler = instagram_messaging.create_instagram_message_handler(client, "test-model", lambda _: {"max_completion_tokens": 100})
+
+    await handler("user1", "123456", "Hi, who are you?", "mid1")
+    await asyncio.sleep(0.04)
+    assert sent == []
+
+    await handler("user1", "123456", "Nastya test: Hi, who are you?", "mid2")
+    await asyncio.sleep(0.04)
+    assert len(sent) == 1
+    assert sent[0][0:2] == ("123456", "user1")
+    assert prompts[0][-1] == {"role": "user", "content": "Hi, who are you?"}
+    system = prompts[0][0]["content"]
+    assert "language of the user's latest message" in system
+    assert "playful joke" in system
+    assert "without a formal disclaimer" in system
+
+    await handler("user2", "123456", "Nastya test: Привіт!", "mid3")
+    await asyncio.sleep(0.04)
+    assert prompts[1][-1]["content"] == "Привіт!"
+    assert len(prompts[1]) == 2
+
+    await handler("user1", "123456", "Nastya test: What else?", "mid4")
+    await asyncio.sleep(0.04)
+    assert prompts[2][-3]["content"] == "Hi, who are you?"
+    assert prompts[2][-2]["content"] == "Hey! Nice to meet you 😊"
+    assert prompts[2][-1]["content"] == "What else?"
+
+    await handler("user1", "123456", "Nastya test: What else?", "mid4")
+    await asyncio.sleep(0.04)
+    assert len(sent) == 3
