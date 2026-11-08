@@ -3,7 +3,7 @@
 No proactive DMs to followers, no posting without owner approval.
 """
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 import logging
 
@@ -65,7 +65,9 @@ def should_send(now, subscription):
     if not isinstance(subscription.get("chat_id"), int):
         return False
     local = now.astimezone(KYIV)
-    return (local.hour >= 9 and subscription.get("last_date") != local.date().isoformat())
+    return (local.hour == 9
+            and local.date().isoformat() >= subscription.get("first_date", "0000-00-00")
+            and subscription.get("last_date") != local.date().isoformat())
 
 
 async def enable_report(change_memory, chat_id):
@@ -77,6 +79,8 @@ async def enable_report(change_memory, chat_id):
             raise ValueError("Invalid report state")
         item["chat_id"] = chat_id
         item["enabled"] = True
+        # Opt-in during the day must not trigger a surprise report immediately.
+        item["first_date"] = (datetime.now(KYIV).date() + timedelta(days=1)).isoformat()
     await change_memory(update)
 
 
@@ -116,7 +120,10 @@ async def daily_report_once(bot, read_memory, change_memory, now=None, fetch=fet
     def reserve(data):
         nonlocal claimed
         current = data.get("instagram_morning_report")
-        if isinstance(current, dict) and current.get("enabled") and current.get("chat_id") == chat_id and current.get("last_date") != today:
+        if (isinstance(current, dict) and current.get("enabled")
+                and current.get("chat_id") == chat_id
+                and today >= current.get("first_date", "0000-00-00")
+                and current.get("last_date") != today):
             current["last_date"] = today
             claimed = True
     await change_memory(reserve)
@@ -184,8 +191,11 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
                 overview = await fetch_account_overview(read_memory)
                 await save_growth_snapshot(change_memory, overview)
                 await message.answer(report_text(overview), reply_markup=menu_keyboard())
-            except Exception:
-                await message.answer("Статистика Meta API поки недоступна. Після наступного повідомлення в Direct повтори перевірку.", reply_markup=menu_keyboard())
+            except Exception as exc:
+                await message.answer(
+                    "Статистика Instagram наразі недоступна. " + str(exc)[:220],
+                    reply_markup=menu_keyboard(),
+                )
         elif action == "caption":
             awaiting_input[query.from_user.id] = "caption"
             await message.answer("✍️ Напиши тему для підпису одним повідомленням — без команд. Наприклад: autumn walk and coffee.")
