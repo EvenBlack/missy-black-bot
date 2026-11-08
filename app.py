@@ -16,6 +16,7 @@ from aiohttp import web
 from instagram_oauth import install_instagram_oauth
 from instagram_webhook import install_instagram_webhook
 from instagram_messaging import create_instagram_message_handler
+from instagram_handoff import list_dialogs, set_dialog_mode
 from PIL import Image, UnidentifiedImageError
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
@@ -1163,6 +1164,57 @@ async def start_command(message: types.Message):
     )
 
 
+@dp.message(Command("ig_dialogs"))
+async def instagram_dialogs_command(message: types.Message):
+    if not message.from_user or (message.from_user.username or "").casefold() != ADMIN_USERNAME.casefold():
+        await message.answer("Немає доступу.")
+        return
+    if message.chat.type != "private":
+        await message.answer("Ця команда доступна тільки в приватному чаті.")
+        return
+    try:
+        dialogs = await list_dialogs(read_memory)
+        if not dialogs:
+            await message.answer("Instagram-діалогів поки не знайдено.")
+            return
+        lines = ["Instagram Direct (останні 15):"]
+        for sender_id, entry in dialogs[:15]:
+            label = "ЛЮДИНА" if entry.get("mode") == "human" else "ШІ"
+            lines.append(f"{sender_id}: {label}")
+        lines.append("Перехопити: /ig_pause ID")
+        lines.append("Повернути ШІ: /ig_resume ID")
+        await message.answer("\\n".join(lines))
+    except Exception:
+        await message.answer("Не можу прочитати стан Instagram з Google Drive.")
+
+
+@dp.message(Command("ig_pause", "ig_resume"))
+async def instagram_handoff_command(message: types.Message):
+    if not message.from_user or (message.from_user.username or "").casefold() != ADMIN_USERNAME.casefold():
+        await message.answer("Немає доступу.")
+        return
+    if message.chat.type != "private":
+        await message.answer("Ця команда доступна тільки в приватному чаті.")
+        return
+    command, _, sender_id = (message.text or "").partition(" ")
+    sender_id = sender_id.strip()
+    if not sender_id.isdigit() or len(sender_id) > 40:
+        await message.answer("Приклад: /ig_pause 123456789 або /ig_resume 123456789")
+        return
+    mode = "human" if command.split("@")[0] == "/ig_pause" else "auto"
+    try:
+        updated = await set_dialog_mode(change_memory, read_memory, sender_id, mode)
+        if not updated:
+            await message.answer("Немає такого діалогу. Доступні ID: /ig_dialogs")
+            return
+        if mode == "human":
+            await message.answer("Ручний режим увімкнено для цього діалогу. Бот мовчить; відповідай у Instagram.")
+        else:
+            await message.answer("Режим ШІ відновлено для цього діалогу (за умови увімкнених автовідповідей).")
+    except Exception:
+        await message.answer("Не вдалося зберегти режим. Автовідповіді залишаються вимкненими глобально.")
+
+
 @dp.message(Command("status"))
 async def status_command(message: types.Message):
     if not await check_access(message):
@@ -2160,7 +2212,7 @@ async def start_web():
     app = web.Application()
     app.router.add_get("/", ping)
     install_instagram_oauth(app, change_memory, drive_store is not None)
-    install_instagram_webhook(app, create_instagram_message_handler(groq_client, GROQ_MODEL, completion_options))
+    install_instagram_webhook(app, create_instagram_message_handler(groq_client, GROQ_MODEL, completion_options, read_memory, change_memory))
 
     runner = web.AppRunner(app)
     await runner.setup()
