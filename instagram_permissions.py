@@ -74,7 +74,7 @@ def render_permissions_report(result):
                 f"(HTTP {result.get('http', '?')}, код {result.get('code', '?')}). "
                 "Це не є доказом недійсності токена.")
     if status != "ok":
-        return "🔐 Meta: перевірка дозволів тимчасово недоступна; токен не змінювала."
+        return "🔐 Meta: не вдалося перевірити дозволи через тимчасову помилку; токен не змінювала."
     good = result["granted"]
     missing = result["missing"]
     return (
