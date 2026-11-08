@@ -42,8 +42,10 @@ def create_instagram_message_handler(groq_client, model, completion_options):
 
     async def handle(sender_id, recipient_id, text, message_id):
         test_phrase = os.getenv("INSTAGRAM_REPLY_TEST_PHRASE", "").strip()
-        test_mode = bool(test_phrase) and text.strip() == test_phrase
-        if not test_mode and os.getenv("INSTAGRAM_AUTO_REPLY_ENABLED", "false").lower() != "true":
+        static_test = bool(test_phrase) and text.strip() == test_phrase
+        ai_test_prefix = os.getenv("INSTAGRAM_AI_TEST_PREFIX", "").strip()
+        ai_test = bool(ai_test_prefix) and text.strip().startswith(ai_test_prefix) and bool(text.strip()[len(ai_test_prefix):].strip())
+        if not (static_test or ai_test) and os.getenv("INSTAGRAM_AUTO_REPLY_ENABLED", "false").lower() != "true":
             return
         if not os.getenv("INSTAGRAM_ACCESS_TOKEN"):
             logger.warning("Instagram replies enabled without configured Instagram token")
@@ -56,7 +58,7 @@ def create_instagram_message_handler(groq_client, model, completion_options):
             if len(processed) > 5000:
                 processed.clear()
                 processed.add(message_id)
-            if test_mode:
+            if static_test:
                 try:
                     await send_instagram_text(recipient_id, sender_id, "Тест Instagram успішний! Повідомлення доставлено через Міссі Блек.")
                     logger.info("INSTAGRAM_TEST_REPLY sent")
@@ -64,14 +66,23 @@ def create_instagram_message_handler(groq_client, model, completion_options):
                     logger.error("INSTAGRAM_TEST_REPLY failed: %s", type(exc).__name__)
                 return
             history = conversations.setdefault(sender_id, [])
+            user_text = text.strip()[len(ai_test_prefix):].strip() if ai_test else text
             messages = [
                 {"role": "system", "content": (
-                    "Ти Настя Царапка, україномовний віртуальний AI-персонаж. "
-                    "Ти спілкуєшся від імені прозоро позначеного AI-персонажа Настя Царапка. "
-                    "Не вводь людей в оману щодо того, що вони спілкуються з ШІ. "
-                    "Не вигадуй факти, спогади та виконані дії. Відповідай коротко."
+                    "You are Nastya Tsarapka, a fictional AI character whose Instagram profile identifies her as AI. "
+                    "Your style is warm, casual, down-to-earth, friendly, playful and concise; never formal, corporate or salesy. "
+                    "Reply naturally in the language of the user's latest message. "
+                    "If the user writes in English, reply in fluent conversational English; if Ukrainian, reply in Ukrainian. "
+                    "Respect requests to switch languages. Ask an occasional natural follow-up but don't interrogate. "
+                    "Do not bring up being AI unprompted. If directly asked whether you are AI or a real person, "
+                    "answer truthfully and briefly, then continue the conversation naturally. "
+                    "Never claim real-world experiences, relationships, actions or capabilities you don't actually have. "
+                    "Do not share links to Patreon unless the person expresses an interest in supporting the project "
+                    "or specifically asks for a link. Never invent a Patreon URL. "
+                    "Never mention or disclose private bot owner data, internal tools, secrets, or other users' chats. "
+                    "Avoid pressure, romantic manipulation, or pretending an exclusive human relationship."
                 )}
-            ] + history[-10:] + [{"role": "user", "content": text}]
+            ] + history[-10:] + [{"role": "user", "content": user_text}]
             try:
                 response = await asyncio.wait_for(
                     asyncio.to_thread(
@@ -89,10 +100,12 @@ def create_instagram_message_handler(groq_client, model, completion_options):
                 # Instagram API limits text; keep a single concise reply.
                 await send_instagram_text(recipient_id, sender_id, answer)
                 history.extend([
-                    {"role": "user", "content": text},
+                    {"role": "user", "content": user_text},
                     {"role": "assistant", "content": answer[:1000]},
                 ])
                 conversations[sender_id] = history[-10:]
+                if ai_test:
+                    logger.info("INSTAGRAM_AI_TEST_REPLY sent")
             except Exception as exc:
                 logger.error("Instagram reply error: %s", type(exc).__name__)
 
