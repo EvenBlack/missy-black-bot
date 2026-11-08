@@ -152,6 +152,8 @@ async def test_ai_test_prefix_isolated_and_conversational(monkeypatch):
     import instagram_messaging
 
     monkeypatch.setenv("INSTAGRAM_AI_TEST_PREFIX", "Nastya test:")
+    monkeypatch.setenv("INSTAGRAM_REPLY_DELAY_MIN_SECONDS", "0")
+    monkeypatch.setenv("INSTAGRAM_REPLY_DELAY_MAX_SECONDS", "0")
     monkeypatch.setenv("INSTAGRAM_AUTO_REPLY_ENABLED", "false")
     monkeypatch.setenv("INSTAGRAM_ACCESS_TOKEN", "unit-token")
     monkeypatch.delenv("INSTAGRAM_REPLY_TEST_PHRASE", raising=False)
@@ -238,3 +240,96 @@ async def test_handoff_blocks_even_explicit_test_replies(monkeypatch):
     await handler("10101", "20202", "Тест Міссі 004", "id3")
     await asyncio.sleep(0.05)
     assert len(called) == 1
+
+
+@pytest.mark.asyncio
+async def test_ig_reply_bursts_coalesce_and_manual_handoff_cancels(monkeypatch):
+    import asyncio
+    import copy
+    from types import SimpleNamespace
+    import instagram_messaging
+    from instagram_handoff import set_dialog_mode
+
+    monkeypatch.setenv("INSTAGRAM_ACCESS_TOKEN", "unit-token")
+    monkeypatch.setenv("INSTAGRAM_AUTO_REPLY_ENABLED", "true")
+    monkeypatch.setenv("INSTAGRAM_REPLY_DELAY_MIN_SECONDS", "0.08")
+    monkeypatch.setenv("INSTAGRAM_REPLY_DELAY_MAX_SECONDS", "0.08")
+    monkeypatch.delenv("INSTAGRAM_REPLY_TEST_PHRASE", raising=False)
+    sent, prompts = [], []
+    data = {}
+    async def read():
+        return copy.deepcopy(data)
+    async def change(callback):
+        callback(data)
+        return copy.deepcopy(data)
+    async def fake_send(account, sender, answer):
+        sent.append((account, sender, answer))
+    def fake_complete(**kwargs):
+        prompts.append(kwargs["messages"])
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="Hi there!"))])
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_complete)))
+    monkeypatch.setattr(instagram_messaging, "send_instagram_text", fake_send)
+    handler = instagram_messaging.create_instagram_message_handler(client, "test", lambda _: {}, read, change)
+
+    await handler("sender1", "12345", "Hello", "m1")
+    await asyncio.sleep(0.025)
+    await handler("sender1", "12345", "How are you?", "m2")
+    await asyncio.sleep(0.025)
+    assert len(sent) == 0
+    assert await set_dialog_mode(change, read, "sender1", "human")
+    await asyncio.sleep(0.12)
+    assert sent == []
+    assert prompts == []
+
+    assert await set_dialog_mode(change, read, "sender1", "auto")
+    await handler("sender1", "12345", "A new thought", "m3")
+    await asyncio.sleep(0.14)
+    assert len(sent) == 1
+    assert prompts[-1][-1]["content"] == "A new thought"
+    assert data["instagram_account_id"] == "12345"
+
+
+@pytest.mark.asyncio
+async def test_instagram_growth_queue_requires_approval_and_enablement(monkeypatch):
+    import copy
+    from datetime import datetime, timezone, timedelta
+    from instagram_growth import (add_draft, approve_draft, queue_summary, publish_due_once,
+                                  weekly_plan, validate_media_url)
+    from instagram_handoff import register_dialog
+
+    state = {}
+    async def read():
+        return copy.deepcopy(state)
+    async def change(callback):
+        callback(state)
+        return copy.deepcopy(state)
+
+    assert len(weekly_plan()) == 7
+    with pytest.raises(ValueError):
+        validate_media_url("http://localhost/private.jpg")
+    with pytest.raises(ValueError):
+        validate_media_url("http://example.com/photo.jpg")
+    await register_dialog(change, read, "sender1", "12345")
+    due = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    draft = await add_draft(change, read, "https://example.com/nastya.jpg", "Hello! #style", due)
+    assert (await queue_summary(read))[0][1]["status"] == "draft"
+    sent = []
+    async def fake_publish(image, caption, account):
+        sent.append((image, caption, account))
+        return "published-001"
+
+    monkeypatch.setenv("INSTAGRAM_POSTING_ENABLED", "true")
+    assert await publish_due_once(read, change, fake_publish) == 0
+    await approve_draft(change, read, draft)
+    assert await publish_due_once(read, change, fake_publish) == 0  # not due yet
+    state["instagram_publish_queue"][draft]["due_at"] = (
+        datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    monkeypatch.setenv("INSTAGRAM_POSTING_ENABLED", "false")
+    assert await publish_due_once(read, change, fake_publish) == 0
+    assert sent == []
+    monkeypatch.setenv("INSTAGRAM_POSTING_ENABLED", "true")
+    assert await publish_due_once(read, change, fake_publish) == 1
+    assert len(sent) == 1
+    assert sent[0][-1] == "12345"
+    assert state["instagram_publish_queue"][draft]["status"] == "published"
+    assert await publish_due_once(read, change, fake_publish) == 0
