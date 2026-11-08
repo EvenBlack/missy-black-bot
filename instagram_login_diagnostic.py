@@ -47,7 +47,7 @@ async def check_login_path():
     if not token:
         return {"status": "config_missing"}
     import re
-    if not re.fullmatch(r"v[0-9]+\\.[0-9]+", version):
+    if not re.fullmatch(r"v[0-9]+[.][0-9]+", version):
         return {"status": "config_error"}
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=12)) as session:
