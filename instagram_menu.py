@@ -641,16 +641,36 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
         if not authorized(message.from_user, message):
             return
         awaiting_input.pop(message.from_user.id, None)
+        if archive_photo is None:
+            await message.answer(
+                "🖼 Завантаження фотографій зараз недоступне. "
+                "Можеш обрати раніше збережену фотографію в архіві.",
+                reply_markup=menu_keyboard(),
+            )
+            return
         try:
-            if archive_photo is not None:
-                archive_id = await archive_photo(message)
-                if not archive_id:
-                    await message.answer(
-                        "🖼 Не отримано підтвердження збереження фотографії, "
-                        "тому чернетку не створено.",
-                        reply_markup=menu_keyboard(),
-                    )
-                    return
-                await show_caption_options(message, archive_id, message.from_user.id)
-        except Exception:
-            await message.answer("Не вдалося зберегти фото в архів.", reply_markup=menu_keyboard())
+            archive_id = await archive_photo(message)
+        except Exception as exc:
+            log.warning("INSTAGRAM_PHOTO_ARCHIVE_FAILED reason=%s", type(exc).__name__)
+            await message.answer(
+                "Не вдалося підтвердити збереження фото. Перевір архів перед повторним надсиланням.",
+                reply_markup=menu_keyboard(),
+            )
+            return
+        if not archive_id:
+            await message.answer(
+                "🖼 Не отримано підтвердження збереження фотографії, "
+                "тому чернетку не створено.",
+                reply_markup=menu_keyboard(),
+            )
+            return
+        try:
+            await show_caption_options(message, archive_id, message.from_user.id)
+        except Exception as exc:
+            log.warning("INSTAGRAM_PHOTO_CAPTION_OPTIONS_FAILED reason=%s", type(exc).__name__)
+            await message.answer(
+                "✅ Фото збережено в архіві, але меню вибору підпису зараз недоступне. "
+                "Відкрий «🖼 Підготувати допис» → «📂 Обрати з уже збережених фото». "
+                "Повторно завантажувати фотографію не потрібно.",
+                reply_markup=menu_keyboard(),
+            )
