@@ -15,6 +15,7 @@ from instagram_growth import weekly_plan, queue_summary, fetch_account_overview,
 from instagram_handoff import list_dialogs, set_dialog_mode
 from instagram_permissions import check_instagram_permissions, render_permissions_report
 from instagram_login_diagnostic import check_login_path, render_login_path
+from instagram_account_diagnostic import check_account_read_path, render_account_read_path
 from instagram_editorial import editorial_idea, editorial_week, render_editorial_idea
 
 log = logging.getLogger("instagram_menu")
@@ -29,7 +30,7 @@ def menu_keyboard():
         [b("📝 Ідея на сьогодні", "idea"), b("📚 Ідеї на 7 днів", "ideasweek")],
         [b("✍️ Підпис до фото", "caption"), b("🖼 Підготувати допис", "photo")],
         [b("📋 Черга дописів", "queue"), b("💬 Instagram Direct", "dialogs")],
-        [b("🔐 Дозволи Meta", "permissions"), b("🔍 Тип підключення", "loginpath")],
+        [b("🔐 Дозволи Meta", "permissions"), b("🔍 Запит до акаунта", "accountread")],
         [b("🔔 Звіт о 09:00", "report")],
         [b("🔄 Оновити меню", "home")],
     ])
@@ -311,6 +312,12 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
                     "Статистика Instagram наразі недоступна. " + str(exc)[:220],
                     reply_markup=menu_keyboard(),
                 )
+        elif action == "accountread":
+            try:
+                report = await check_account_read_path(read_memory)
+                await message.answer(render_account_read_path(report), reply_markup=menu_keyboard())
+            except Exception:
+                await message.answer("Не вдалося перевірити доступ до акаунта.", reply_markup=menu_keyboard())
         elif action == "loginpath":
             try:
                 await message.answer(
