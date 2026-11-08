@@ -13,6 +13,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BufferedIn
 
 from instagram_growth import weekly_plan, queue_summary, fetch_account_overview, save_growth_snapshot, add_photo_draft, approve_draft, discard_draft, publish_one_now
 from instagram_handoff import list_dialogs, set_dialog_mode
+from instagram_permissions import check_instagram_permissions, render_permissions_report
 
 log = logging.getLogger("instagram_menu")
 KYIV = ZoneInfo("Europe/Kyiv")
@@ -24,7 +25,8 @@ def menu_keyboard():
         [b("📊 Підписники", "stats"), b("📅 План на тиждень", "plan")],
         [b("✍️ Підпис до фото", "caption"), b("🖼 Підготувати допис", "photo")],
         [b("📋 Черга дописів", "queue"), b("💬 Instagram Direct", "dialogs")],
-        [b("🔔 Звіт о 09:00", "report"), b("🔄 Оновити меню", "home")],
+        [b("🔐 Дозволи Meta", "permissions"), b("🔔 Звіт о 09:00", "report")],
+        [b("🔄 Оновити меню", "home")],
     ])
 
 
@@ -272,6 +274,12 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
                     "Статистика Instagram наразі недоступна. " + str(exc)[:220],
                     reply_markup=menu_keyboard(),
                 )
+        elif action == "permissions":
+            try:
+                report = render_permissions_report(await check_instagram_permissions())
+                await message.answer(report, reply_markup=menu_keyboard())
+            except Exception:
+                await message.answer("Не вдалося перевірити права Meta безпечно.", reply_markup=menu_keyboard())
         elif action == "caption":
             awaiting_input[query.from_user.id] = "caption"
             await message.answer("✍️ Напиши тему для підпису одним повідомленням — без команд. Наприклад: autumn walk and coffee.")
