@@ -211,6 +211,18 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
         data, filename, _ = await get_owner_photo(owner_id, archive_id)
         if not isinstance(data, bytes) or not data or len(data) > 8 * 1024 * 1024:
             raise ValueError("Invalid archived photo bytes")
+        # Telegram previews use a modest JPEG; the archived original is never changed.
+        from io import BytesIO
+        from PIL import Image
+        def thumbnail():
+            with Image.open(BytesIO(data)) as picture:
+                picture.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
+                if picture.mode != "RGB":
+                    picture = picture.convert("RGB")
+                out = BytesIO()
+                picture.save(out, format="JPEG", quality=78, optimize=True)
+                return out.getvalue()
+        thumb = await asyncio.to_thread(thumbnail)
         # Only render the requested item; no public URLs or private photo data in logs.
         nav = []
         if index > 0:
@@ -229,7 +241,7 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
             "Перевір зображення перед вибором."
         )
         await message.answer_photo(
-            BufferedInputFile(data, filename=filename or "archive.jpg"),
+            BufferedInputFile(thumb, filename="archive_preview.jpg"),
             caption=caption,
             reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_rows),
         )
