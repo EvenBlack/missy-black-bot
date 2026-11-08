@@ -63,8 +63,18 @@ def render_permissions_report(result):
         return "🔐 Meta: відсутні налаштування застосунку або токена в Render."
     if status == "invalid_token":
         return "🔐 Meta: поточний токен більше не дійсний."
+    if status == "check_unavailable" and str(result.get("code")) == "200":
+        return ("🔐 Meta повернула код 200 (доступ заборонений) під час перевірки токена. "
+                "Це не доводить, що сам токен недійсний: статистика Instagram працює. "
+                "Потрібно перевірити відповідність токена застосунку Meta та дозволи "
+                "на публікацію в Meta Business Settings → Users → System users. "
+                "Не надсилай токен або секрети в чат.")
+    if status == "check_unavailable":
+        return ("🔐 Meta не дозволила перевірити права токена "
+                f"(HTTP {result.get('http', '?')}, код {result.get('code', '?')}). "
+                "Це не є доказом недійсності токена.")
     if status != "ok":
-        return "🔐 Meta: поки не вдалося перевірити дозволи токена. Спробуй ще раз пізніше."
+        return "🔐 Meta: перевірка дозволів тимчасово недоступна; токен не змінювала."
     good = result["granted"]
     missing = result["missing"]
     return (
