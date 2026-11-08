@@ -13,10 +13,10 @@ def get_dialogs(data):
     return records if isinstance(records, dict) else {}
 
 
-async def register_dialog(change_memory, read_memory, sender_id):
+async def register_dialog(change_memory, read_memory, sender_id, instagram_account_id=None):
     sender_id = str(sender_id)
     data = await read_memory()
-    if sender_id in get_dialogs(data):
+    if sender_id in get_dialogs(data) and (not instagram_account_id or data.get("instagram_account_id")):
         return
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -25,6 +25,12 @@ async def register_dialog(change_memory, read_memory, sender_id):
         if not isinstance(records, dict):
             raise ValueError("Invalid Instagram dialog state")
         records.setdefault(sender_id, {"mode": "auto", "first_seen": now})
+        if instagram_account_id and str(instagram_account_id).isdigit():
+            existing_account = payload.get("instagram_account_id")
+            if existing_account is None:
+                payload["instagram_account_id"] = str(instagram_account_id)
+            elif str(existing_account) != str(instagram_account_id):
+                raise ValueError("Unexpected Instagram business account ID")
         if len(records) > MAX_DIALOGS:
             removable = sorted(
                 ((key, item.get("first_seen", "")) for key, item in records.items()
