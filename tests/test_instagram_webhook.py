@@ -107,7 +107,7 @@ async def test_instagram_send_uses_instagram_graph_and_account_id(monkeypatch):
     monkeypatch.setattr(instagram_messaging.aiohttp, "ClientSession", FakeSession)
     answer = await instagram_messaging.send_instagram_text("123456", "998877", "Привіт")
     assert answer == {"message_id": "success"}
-    assert recorded["url"] == "https://graph.instagram.com/v25.0/123456/messages"
+    assert recorded["url"] == "https://graph.facebook.com/v25.0/123456/messages"
     assert recorded["payload"] == {"recipient": {"id": "998877"}, "message": {"text": "Привіт"}}
     assert recorded["headers"]["Authorization"] == "Bearer test-token"
 
@@ -116,7 +116,7 @@ async def test_instagram_send_uses_instagram_graph_and_account_id(monkeypatch):
 async def test_instagram_send_without_token_is_blocked(monkeypatch):
     import instagram_messaging
     monkeypatch.delenv("INSTAGRAM_ACCESS_TOKEN", raising=False)
-    with pytest.raises(RuntimeError, match="Instagram Login token"):
+    with pytest.raises(RuntimeError, match="Instagram Unified Login token"):
         await instagram_messaging.send_instagram_text("123456", "998877", "Hello")
 
 
