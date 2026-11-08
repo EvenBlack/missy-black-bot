@@ -181,3 +181,43 @@ async def publisher_loop(read_memory, change_memory):
         except Exception as exc:
             log.error("INSTAGRAM_PUBLISH scheduler_error=%s", type(exc).__name__)
         await asyncio.sleep(60)
+
+
+async def fetch_account_overview(read_memory):
+    """Basic current-account overview. No scraping or unrelated accounts."""
+    token = os.getenv("INSTAGRAM_ACCESS_TOKEN")
+    data = await read_memory()
+    account_id = data.get("instagram_account_id") or os.getenv("INSTAGRAM_ACCOUNT_ID")
+    if not token or not account_id or not str(account_id).isdigit():
+        raise RuntimeError("Instagram account is not yet registered")
+    version = os.getenv("META_GRAPH_VERSION", "v27.0")
+    url = f"https://graph.facebook.com/{version}/{account_id}"
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+        async with session.get(url, params={"fields": "username,followers_count,media_count"},
+                               headers={"Authorization": f"Bearer {token}"}) as response:
+            body = await response.json(content_type=None)
+            if response.status >= 400 or not isinstance(body, dict):
+                log.warning("INSTAGRAM_STATS unavailable http=%s", response.status)
+                raise RuntimeError("Instagram account overview unavailable")
+            return {
+                "username": str(body.get("username", ""))[:120],
+                "followers_count": body.get("followers_count"),
+                "media_count": body.get("media_count"),
+            }
+
+
+async def save_growth_snapshot(change_memory, overview):
+    """Save up to 90 daily follower snapshots for trend comparisons."""
+    today = datetime.now(timezone.utc).date().isoformat()
+    followers = overview.get("followers_count")
+    posts = overview.get("media_count")
+    if not isinstance(followers, int) or followers < 0:
+        return
+    def update(data):
+        snapshots = data.setdefault("instagram_growth_snapshots", {})
+        if not isinstance(snapshots, dict):
+            raise ValueError("Invalid follower history")
+        snapshots[today] = {"followers": followers, "posts": posts}
+        for key in sorted(snapshots)[:-90]:
+            snapshots.pop(key, None)
+    await change_memory(update)
