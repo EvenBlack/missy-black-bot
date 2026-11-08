@@ -18,6 +18,7 @@ from instagram_login_diagnostic import check_login_path, render_login_path
 from instagram_account_diagnostic import check_account_read_path, render_account_read_path
 from instagram_token_source_audit import audit_instagram_token_sources, render_token_source_audit
 from instagram_editorial import IDEAS, editorial_idea, editorial_week, render_editorial_idea
+from instagram_caption_translation import bilingual_editorial_caption
 
 log = logging.getLogger("instagram_menu")
 KYIV = ZoneInfo("Europe/Kyiv")
@@ -242,7 +243,7 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
             "🖼 Чернетка №" + draft_id + "\\n"
             "Тема: " + idea["topic"] + "\\n"
             "Рекомендований кадр: " + idea["shot"] + "\\n\\n"
-            + caption +
+            + bilingual_editorial_caption(caption) +
             "\\n\\nПереконайся, що текст відповідає саме вибраному фото. "
             "Нічого не опубліковано; автоматичні публікації вимкнені.",
             reply_markup=kb,
@@ -322,7 +323,7 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
             lines += [f"{r['day']}. {r['topic']}: {r['idea']}" for r in weekly_plan()]
             await message.answer("\n".join(lines), reply_markup=menu_keyboard())
         elif action == "idea":
-            await message.answer(render_editorial_idea(editorial_idea()), reply_markup=menu_keyboard())
+            await message.answer(render_editorial_idea(editorial_idea()) + "\\n\\n" + bilingual_editorial_caption(editorial_idea()["caption"]).split("🇺🇦 Український переклад:")[-1].join([]) if False else render_editorial_idea(editorial_idea()) + "\\n\\n🇺🇦 Український переклад:\\n" + (translate_editorial_caption(editorial_idea()["caption"]) or "Немає перекладу"), reply_markup=menu_keyboard())
         elif action == "ideasweek":
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
