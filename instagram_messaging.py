@@ -48,7 +48,7 @@ def create_instagram_message_handler(groq_client, model, completion_options):
             history = conversations.setdefault(sender_id, [])
             messages = [
                 {"role": "system", "content": (
-                    "Ти Міссі Блек/Катруся, україномовна доброзичлива асистентка. "
+                    "Ти Настя Царапка, україномовний віртуальний AI-персонаж. "
                     "Ти спілкуєшся від імені прозоро позначеного AI-персонажа Настя Царапка. "
                     "Не вводь людей в оману щодо того, що вони спілкуються з ШІ. "
                     "Не вигадуй факти, спогади та виконані дії. Відповідай коротко."
@@ -78,7 +78,7 @@ def create_instagram_message_handler(groq_client, model, completion_options):
             except Exception as exc:
                 logger.error("Instagram reply error: %s", type(exc).__name__)
 
-    def schedule(sender_id, recipient_id, text, message_id):
+    async def schedule(sender_id, recipient_id, text, message_id):
         task = asyncio.create_task(handle(sender_id, recipient_id, text, message_id))
         task.add_done_callback(lambda t: logger.error("Instagram task failed") if t.exception() else None)
 
