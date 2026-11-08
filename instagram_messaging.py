@@ -1,4 +1,4 @@
-"""Instagram Login messaging transport. Replies are opt-in and use an Instagram access token."""
+"""Instagram Unified Login messaging transport. Replies are opt-in and use a system-user token."""
 import asyncio
 import logging
 import os
@@ -12,9 +12,9 @@ async def send_instagram_text(ig_user_id, recipient_id, text):
     """Only send a response to an Instagram-scoped user who initiated contact."""
     token = os.getenv("INSTAGRAM_ACCESS_TOKEN", "")
     if not token or not str(ig_user_id).isdigit():
-        raise RuntimeError("Instagram Login token or Instagram account ID missing")
+        raise RuntimeError("Instagram Unified Login token or account ID missing")
     api_version = os.getenv("META_GRAPH_VERSION", "v24.0")
-    url = f"https://graph.instagram.com/{api_version}/{ig_user_id}/messages"
+    url = f"https://graph.facebook.com/{api_version}/{ig_user_id}/messages"
     payload = {"recipient": {"id": str(recipient_id)}, "message": {"text": text[:1000]}}
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
         async with session.post(url, json=payload, headers={"Authorization": f"Bearer {token}"}) as response:
