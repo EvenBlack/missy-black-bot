@@ -236,8 +236,8 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
             keyboard_rows.append(nav)
         keyboard_rows.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="igmenu:home")])
         caption = (
-            f"📷 Фото {index+1} із {len(valid)}\\n"
-            f"{str(item.get('caption') or item.get('filename') or filename)[:110]}\\n"
+            f"📷 Фото {index+1} із {len(valid)}\n"
+            f"{str(item.get('caption') or item.get('filename') or filename)[:110]}\n"
             "Перевір зображення перед вибором."
         )
         await message.answer_photo(
