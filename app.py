@@ -1204,7 +1204,7 @@ async def create_instagram_caption_for_menu(topic):
 
 
 async def archive_instagram_menu_photo(message):
-    await receive_archived_image(message, message.photo[-1], False)
+    return await receive_archived_image(message, message.photo[-1], False)
 
 
 async def list_owner_instagram_photos(owner_id):
