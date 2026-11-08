@@ -83,6 +83,14 @@ async def find_existing_post(account, caption):
             profile = await response.json(content_type=None)
             profile_status = response.status
         if profile_status >= 400 or not isinstance(profile, dict):
+            error = profile.get("error", {}) if isinstance(profile, dict) else {}
+            if not isinstance(error, dict):
+                error = {}
+            log.warning(
+                "INSTAGRAM_FIRST_POST profile_unavailable http=%s code=%s subcode=%s",
+                profile_status, str(error.get("code", ""))[:12],
+                str(error.get("error_subcode", ""))[:12],
+            )
             raise RuntimeError("Instagram media verification unavailable")
         if (str(profile.get("username", "")).casefold() != "_tsarapka__"
                 or type(profile.get("media_count")) is not int
