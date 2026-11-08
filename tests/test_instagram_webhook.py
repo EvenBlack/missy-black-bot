@@ -118,3 +118,29 @@ async def test_instagram_send_without_token_is_blocked(monkeypatch):
     monkeypatch.delenv("INSTAGRAM_ACCESS_TOKEN", raising=False)
     with pytest.raises(RuntimeError, match="Instagram Login token"):
         await instagram_messaging.send_instagram_text("123456", "998877", "Hello")
+
+
+@pytest.mark.asyncio
+async def test_one_phrase_reply_without_general_auto_replies(monkeypatch):
+    import asyncio
+    import instagram_messaging
+    monkeypatch.setenv("INSTAGRAM_REPLY_TEST_PHRASE", "Тест Міссі 004")
+    monkeypatch.setenv("INSTAGRAM_AUTO_REPLY_ENABLED", "false")
+    monkeypatch.setenv("INSTAGRAM_ACCESS_TOKEN", "test-token")
+    calls = []
+
+    async def fake_send(account_id, sender_id, text):
+        calls.append((account_id, sender_id, text))
+
+    monkeypatch.setattr(instagram_messaging, "send_instagram_text", fake_send)
+    handler = instagram_messaging.create_instagram_message_handler(object(), "unused", lambda _: {})
+    await handler("sender", "account", "Звичайне повідомлення", "midnormal")
+    await asyncio.sleep(0.03)
+    assert calls == []
+    await handler("sender", "account", "Тест Міссі 004", "midtest")
+    await asyncio.sleep(0.03)
+    assert len(calls) == 1
+    assert calls[0][:2] == ("account", "sender")
+    await handler("sender", "account", "Тест Міссі 004", "midtest")
+    await asyncio.sleep(0.03)
+    assert len(calls) == 1
