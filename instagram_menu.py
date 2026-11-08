@@ -11,7 +11,7 @@ from aiogram import F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from instagram_growth import weekly_plan, queue_summary, fetch_account_overview, save_growth_snapshot
+from instagram_growth import weekly_plan, queue_summary, fetch_account_overview, save_growth_snapshot, add_photo_draft, approve_draft, discard_draft
 from instagram_handoff import list_dialogs, set_dialog_mode
 
 log = logging.getLogger("instagram_menu")
@@ -205,6 +205,25 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
                 "🖼 Надішли фото Насті наступним повідомленням. Я збережу його в архіві; "
                 "публікація поки не відбудеться, доки не налаштуємо публічний URL і погодження."
             )
+        elif action.startswith(("approvephoto:", "cancelphoto:")):
+            cmd, _, draft_id = action.partition(":")
+            if not __import__("re").fullmatch(r"[a-f0-9]{8}", draft_id):
+                await message.answer("Неправильний код чернетки.")
+                return
+            try:
+                if cmd == "approvephoto":
+                    await approve_draft(change_memory, read_memory, draft_id)
+                    await message.answer(
+                        "✅ Чернетку погоджено. Автопублікатор ще вимкнено: "
+                        "фото не опублікується до окремої перевірки та увімкнення публікацій.",
+                        reply_markup=menu_keyboard(),
+                    )
+                else:
+                    await discard_draft(change_memory, draft_id)
+                    await message.answer("🗑 Чернетку скасовано. Фото лишилося у твоєму приватному архіві.",
+                                         reply_markup=menu_keyboard())
+            except Exception:
+                await message.answer("Не вдалося змінити чернетку. Вона могла бути вже погоджена або скасована.")
         elif action == "queue":
             try:
                 items = await queue_summary(read_memory)
@@ -286,11 +305,31 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
         awaiting_input.pop(message.from_user.id, None)
         try:
             if archive_photo is not None:
-                await archive_photo(message)
+                archive_id = await archive_photo(message)
+                if not archive_id:
+                    await message.answer(
+                        "🖼 Не отримано підтвердження збереження фотографії, "
+                        "тому чернетку не створено.",
+                        reply_markup=menu_keyboard(),
+                    )
+                    return
+                caption = (
+                    "Coffee, messy curls, and crunchy autumn leaves 🍂☕🧡\\n\\n"
+                    "Honestly, I could stay out here all day… until my coffee gets cold 😂\\n\\n"
+                    "Are you a fall person or do you already miss summer?\\n\\n"
+                    "#AutumnVibes #CurlyHair #CozyDays #FallOutfit #CoffeeLover"
+                )
+                draft_id = await add_photo_draft(change_memory, archive_id, message.from_user.id, caption)
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="✅ Погодити чернетку", callback_data="igmenu:approvephoto:" + draft_id)],
+                    [InlineKeyboardButton(text="❌ Скасувати", callback_data="igmenu:cancelphoto:" + draft_id)],
+                ])
                 await message.answer(
-                    "🖼 Фото передано до фотоархіву Міссі. "
-                    "Це ще не Instagram-допис: потрібен публічний медіа-URL.",
-                    reply_markup=menu_keyboard(),
+                    "🖼 Фото збережено в приватному архіві. Підготувала чернетку №" + draft_id
+                    + "\\n\\n" + caption +
+                    "\\n\\nНічого не опубліковано. Погодження чернетки також "
+                    "не запускає публікації, доки автопублікатор вимкнено.",
+                    reply_markup=kb,
                 )
             else:
                 await message.answer("Збереження фото ще не налаштовано.", reply_markup=menu_keyboard())
