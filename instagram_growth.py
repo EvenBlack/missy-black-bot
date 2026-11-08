@@ -113,6 +113,27 @@ async def publish_image(image_url, caption, account_id=None):
                 log.error("INSTAGRAM_PUBLISH container_error http=%s", response.status)
                 raise RuntimeError("Instagram media container rejected")
         container_id = str(container["id"])
+        # Meta processes media asynchronously; publishing an unready container fails.
+        ready = False
+        for attempt in range(6):
+            async with session.get(
+                f"https://graph.facebook.com/{version}/{container_id}",
+                params={"fields": "status_code"},
+                headers={"Authorization": f"Bearer {token}"},
+            ) as status_response:
+                status_body = await status_response.json(content_type=None)
+                if status_response.status >= 400 or not isinstance(status_body, dict):
+                    raise RuntimeError("Instagram media readiness check failed")
+                status = status_body.get("status_code")
+                if status == "FINISHED":
+                    ready = True
+                    break
+                if status in {"ERROR", "EXPIRED"}:
+                    raise RuntimeError("Instagram media processing failed")
+            if attempt < 5:
+                await asyncio.sleep(4)
+        if not ready:
+            raise RuntimeError("Instagram media container not ready")
         async with session.post(
             f"{root}/media_publish",
             data={"creation_id": container_id},
