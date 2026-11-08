@@ -394,3 +394,38 @@ async def save_growth_snapshot(change_memory, overview):
         for key in sorted(snapshots)[:-90]:
             snapshots.pop(key, None)
     await change_memory(update)
+
+
+def weekly_growth_report(state, today=None):
+    """Seven-day read-only daily follower trend from verified stored snapshots.
+
+    Does not extrapolate unobserved days or synthesize Meta follower values.
+    """
+    from datetime import timedelta
+    if today is None:
+        today = datetime.now(timezone.utc).date()
+    daily = state.get("instagram_growth_snapshots", {}) if isinstance(state, dict) else {}
+    if not isinstance(daily, dict):
+        daily = {}
+    rows = []
+    for i in range(6, -1, -1):
+        day = (today - timedelta(days=i)).isoformat()
+        item = daily.get(day)
+        if not isinstance(item, dict):
+            continue
+        followers = item.get("followers")
+        if type(followers) is not int or followers < 0:
+            continue
+        rows.append((day, followers))
+    if not rows:
+        return "📈 За останні 7 днів ще немає підтверджених вимірювань. Звіти почнуть будувати історію."
+    output = ["📈 Підписники Насті — останні 7 днів:"]
+    for day, followers in rows:
+        output.append(f"• {day}: {followers}")
+    if len(rows) >= 2:
+        change = rows[-1][1] - rows[0][1]
+        output.append(f"Зміна між першою й останньою наявними датами: {change:+d}")
+    else:
+        output.append("Для порівняння потрібні вимірювання хоча б за дві різні дати.")
+    output.append("Пропущені дні не заповнюються припущеннями.")
+    return "\n".join(output)
