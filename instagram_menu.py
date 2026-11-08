@@ -17,7 +17,7 @@ from instagram_permissions import check_instagram_permissions, render_permission
 from instagram_login_diagnostic import check_login_path, render_login_path
 from instagram_account_diagnostic import check_account_read_path, render_account_read_path
 from instagram_token_source_audit import audit_instagram_token_sources, render_token_source_audit
-from instagram_editorial import editorial_idea, editorial_week, render_editorial_idea
+from instagram_editorial import IDEAS, editorial_idea, editorial_week, render_editorial_idea
 
 log = logging.getLogger("instagram_menu")
 KYIV = ZoneInfo("Europe/Kyiv")
@@ -36,6 +36,28 @@ def menu_keyboard():
         [b("🔔 Звіт о 09:00", "report")],
         [b("🔄 Оновити меню", "home")],
     ])
+
+
+def caption_options_keyboard(archive_id):
+    """Owner chooses one of seven original caption topics before drafting."""
+    if not __import__("re").fullmatch(r"[a-f0-9]{24}", str(archive_id)):
+        raise ValueError("Invalid archive photo")
+    rows = [
+        [InlineKeyboardButton(
+            text=f"✍️ {i+1}. {idea['topic']}",
+            callback_data=f"igmenu:concept:{archive_id}:{i}",
+        )]
+        for i, idea in enumerate(IDEAS)
+    ]
+    rows.append([InlineKeyboardButton(text="⬅️ До архіву", callback_data="igmenu:archive")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def caption_for_topic(index):
+    """Caption is chosen explicitly; never assume an autumn photo."""
+    if type(index) is not int or not 0 <= index < len(IDEAS):
+        raise ValueError("Invalid editorial topic")
+    return IDEAS[index]
 
 
 def dialog_keyboard(dialogs):
@@ -180,22 +202,49 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
             return
         await message.answer("🌿 Меню Насті й Міссі. Обери дію:", reply_markup=menu_keyboard())
 
-    async def send_photo_draft(message, archive_id, owner_id):
-        caption = (
-            "Coffee, messy curls, and crunchy autumn leaves 🍂☕🧡\n\n"
-            "Honestly, I could stay out here all day… until my coffee gets cold 😂\n\n"
-            "Are you a fall person or do you already miss summer?\n\n"
-            "#AutumnVibes #CurlyHair #CozyDays #FallOutfit #CoffeeLover"
+    async def show_caption_options(message, archive_id, owner_id):
+        """Offer captions before writing anything into the persistent queue."""
+        if not __import__("re").fullmatch(r"[a-f0-9]{24}", str(archive_id)):
+            raise ValueError("Invalid photo ID")
+        if list_owner_photos is None:
+            raise ValueError("Photo archive unavailable")
+        photos = await list_owner_photos(owner_id)
+        if not any(
+            isinstance(photo, dict) and photo.get("archive_id") == archive_id
+            for photo in photos
+        ):
+            raise ValueError("Owner photo unavailable")
+        await message.answer(
+            "🖼 Фото вибрано. Тепер вибери тему англомовного підпису. "
+            "Після цього Міссі покаже повний текст, і ти зможеш погодити "
+            "або відхилити чернетку. Нічого не опубліковано.",
+            reply_markup=caption_options_keyboard(archive_id),
         )
+
+    async def send_photo_draft(message, archive_id, owner_id, caption_index):
+        """Create draft only after owner selected one of the visible topics."""
+        if list_owner_photos is None:
+            raise ValueError("Photo archive unavailable")
+        photos = await list_owner_photos(owner_id)
+        if not any(
+            isinstance(photo, dict) and photo.get("archive_id") == archive_id
+            for photo in photos
+        ):
+            raise ValueError("Owner photo unavailable")
+        idea = caption_for_topic(caption_index)
+        caption = idea["caption"]
         draft_id = await add_photo_draft(change_memory, archive_id, owner_id, caption)
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ Погодити чернетку", callback_data="igmenu:approvephoto:" + draft_id)],
             [InlineKeyboardButton(text="❌ Скасувати", callback_data="igmenu:cancelphoto:" + draft_id)],
         ])
         await message.answer(
-            "🖼 Чернетка №" + draft_id + "\n\n" + caption +
-            "\n\nНічого не опубліковано. Навіть погодження не запускає "
-            "публікацію, доки автопублікатор вимкнений.",
+            "🖼 Чернетка №" + draft_id + "\\n"
+            "Тема: " + idea["topic"] + "\\n"
+            "Рекомендований кадр: " + idea["shot"] + "\\n\\n"
+            + caption +
+            "\\n\\nПереконайся, що текст відповідає саме вибраному фото. "
+            "Нічого не опубліковано; автоматичні публікації вимкнені.",
             reply_markup=kb,
         )
 
@@ -386,9 +435,25 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
                 if not any(str(p.get("archive_id")) == photo_id for p in photos):
                     await message.answer("Цього фото вже немає в доступному списку архіву.")
                     return
-                await send_photo_draft(message, photo_id, query.from_user.id)
+                await show_caption_options(message, photo_id, query.from_user.id)
             except Exception:
                 await message.answer("Не вдалося підготувати чернетку з архіву.")
+        elif action.startswith("concept:"):
+            parts = action.split(":")
+            if (len(parts) != 3
+                    or not __import__("re").fullmatch(r"[a-f0-9]{24}", parts[1])
+                    or not parts[2].isdigit()
+                    or len(parts[2]) > 2):
+                return
+            try:
+                await send_photo_draft(
+                    message, parts[1], query.from_user.id, int(parts[2])
+                )
+            except ValueError:
+                await message.answer("Не вдалося створити чернетку: фото або тема недоступні.")
+            except Exception as exc:
+                log.warning("INSTAGRAM_CAPTION_DRAFT_FAILED reason=%s", type(exc).__name__)
+                await message.answer("Не вдалося зберегти чернетку. Спробуй ще раз.")
         elif action.startswith(("approvephoto:", "cancelphoto:")):
             cmd, _, draft_id = action.partition(":")
             if not __import__("re").fullmatch(r"[a-f0-9]{8}", draft_id):
@@ -582,6 +647,6 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
                         reply_markup=menu_keyboard(),
                     )
                     return
-                await send_photo_draft(message, archive_id, message.from_user.id)
+                await show_caption_options(message, archive_id, message.from_user.id)
         except Exception:
             await message.answer("Не вдалося зберегти фото в архів.", reply_markup=menu_keyboard())
