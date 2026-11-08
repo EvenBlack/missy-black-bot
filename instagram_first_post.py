@@ -58,13 +58,39 @@ async def find_existing_post(account, caption):
             "fields": "id,caption,permalink,timestamp", "limit": "30",
         }, headers={"Authorization": "Bearer " + token}) as response:
             body = await response.json(content_type=None)
-            if response.status >= 400 or not isinstance(body, dict) or not isinstance(body.get("data"), list):
-                log.warning("INSTAGRAM_FIRST_POST verification_unavailable http=%s", response.status)
-                raise RuntimeError("Cannot verify existing posts")
-    for item in body["data"]:
-        if isinstance(item, dict) and str(item.get("caption", "")).strip() == caption.strip():
-            return str(item.get("id", ""))
-    return None
+            status = response.status
+        if status < 400 and isinstance(body, dict) and isinstance(body.get("data"), list):
+            for item in body["data"]:
+                if isinstance(item, dict) and str(item.get("caption", "")).strip() == caption.strip():
+                    return str(item.get("id", ""))
+            return None
+        error = body.get("error", {}) if isinstance(body, dict) else {}
+        if not isinstance(error, dict):
+            error = {}
+        log.warning("INSTAGRAM_FIRST_POST media_list_unavailable http=%s code=%s subcode=%s",
+                    status, str(error.get("code", ""))[:12],
+                    str(error.get("error_subcode", ""))[:12])
+        # The recent-media edge is not accessible with all Unified Login
+        # system-user grants. The owner established a four-post baseline before
+        # authorizing THIS one post. Only an unchanged, verified count for the
+        # exact @_tsarapka__ account is an acceptable substitute. If the count
+        # changed or is unavailable, block publication instead of guessing.
+        async with session.get(
+            f"https://graph.facebook.com/{version}/{account}",
+            params={"fields": "username,media_count"},
+            headers={"Authorization": "Bearer " + token},
+        ) as response:
+            profile = await response.json(content_type=None)
+            profile_status = response.status
+        if profile_status >= 400 or not isinstance(profile, dict):
+            raise RuntimeError("Instagram media verification unavailable")
+        if (str(profile.get("username", "")).casefold() != "_tsarapka__"
+                or type(profile.get("media_count")) is not int
+                or profile["media_count"] != 4):
+            log.warning("INSTAGRAM_FIRST_POST baseline_mismatch")
+            raise RuntimeError("Instagram post count changed; manual check required")
+        log.info("INSTAGRAM_FIRST_POST account_verified_baseline_media_count=4")
+        return None
 
 
 async def one_shot_first_post(bot, read_memory, change_memory, find_existing=find_existing_post,
