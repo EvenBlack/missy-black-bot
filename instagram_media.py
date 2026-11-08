@@ -13,10 +13,6 @@ import re
 from urllib.parse import quote
 
 from aiohttp import web
-from PIL import Image
-
-from photo_archive import retrieve_image
-
 log = logging.getLogger("instagram_media")
 ID_PATTERN = re.compile(r"^[a-f0-9]{24}$")
 DRAFT_PATTERN = re.compile(r"^[a-f0-9]{8}$")
@@ -50,6 +46,7 @@ def signed_media_url(base_url, draft_id, archive_id, owner_id, expires):
 
 async def _to_jpeg(data):
     def convert():
+        from PIL import Image
         with Image.open(BytesIO(data)) as image:
             image.load()
             if image.width * image.height > 40_000_000:
@@ -94,6 +91,7 @@ def install_instagram_media(app, read_memory, archive_store):
                     or str(entry.get("photo_archive_id")) != archive_id
                     or str(entry.get("photo_owner_id")) != owner):
                 raise web.HTTPNotFound()
+            from photo_archive import retrieve_image
             data, _, _ = await retrieve_image(archive_store, owner, archive_id)
             jpeg = await _to_jpeg(data)
             return web.Response(body=jpeg, content_type="image/jpeg",
