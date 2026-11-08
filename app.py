@@ -1201,7 +1201,14 @@ async def archive_instagram_menu_photo(message):
     await receive_archived_image(message, message.photo[-1], False)
 
 
-install_instagram_menu(dp, bot, ADMIN_USERNAME, read_memory, change_memory, create_instagram_caption_for_menu, archive_instagram_menu_photo)
+async def list_owner_instagram_photos(owner_id):
+    if not drive_store:
+        return []
+    result = await drive_store.request("list_photos", owner=str(owner_id), query="")
+    return result.get("photos", [])
+
+
+install_instagram_menu(dp, bot, ADMIN_USERNAME, read_memory, change_memory, create_instagram_caption_for_menu, archive_instagram_menu_photo, list_owner_instagram_photos)
 
 
 @dp.message(Command("ig_stats"))
