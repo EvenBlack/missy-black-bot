@@ -38,6 +38,28 @@ def menu_keyboard():
     ])
 
 
+def caption_options_keyboard(archive_id):
+    """Owner chooses one of seven original caption topics before drafting."""
+    if not __import__("re").fullmatch(r"[a-f0-9]{24}", str(archive_id)):
+        raise ValueError("Invalid archive photo")
+    rows = [
+        [InlineKeyboardButton(
+            text=f"✍️ {i+1}. {idea['topic']}",
+            callback_data=f"igmenu:concept:{archive_id}:{i}",
+        )]
+        for i, idea in enumerate(IDEAS)
+    ]
+    rows.append([InlineKeyboardButton(text="⬅️ До архіву", callback_data="igmenu:archive")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def caption_for_topic(index):
+    """Caption is chosen explicitly; never assume an autumn photo."""
+    if type(index) is not int or not 0 <= index < len(IDEAS):
+        raise ValueError("Invalid editorial topic")
+    return IDEAS[index]
+
+
 def dialog_keyboard(dialogs):
     b = lambda label, action: InlineKeyboardButton(text=label, callback_data="igmenu:" + action)
     rows = []
@@ -192,25 +214,15 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
             for photo in photos
         ):
             raise ValueError("Owner photo unavailable")
-        rows = [
-            [InlineKeyboardButton(
-                text=f"✍️ {i+1}. {idea['topic']}",
-                callback_data=f"igmenu:concept:{archive_id}:{i}",
-            )]
-            for i, idea in enumerate(IDEAS)
-        ]
-        rows.append([InlineKeyboardButton(text="⬅️ До архіву", callback_data="igmenu:archive")])
         await message.answer(
             "🖼 Фото вибрано. Тепер вибери тему англомовного підпису. "
             "Після цього Міссі покаже повний текст, і ти зможеш погодити "
             "або відхилити чернетку. Нічого не опубліковано.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+            reply_markup=caption_options_keyboard(archive_id),
         )
 
     async def send_photo_draft(message, archive_id, owner_id, caption_index):
         """Create draft only after owner selected one of the visible topics."""
-        if type(caption_index) is not int or not 0 <= caption_index < len(IDEAS):
-            raise ValueError("Invalid editorial idea")
         if list_owner_photos is None:
             raise ValueError("Photo archive unavailable")
         photos = await list_owner_photos(owner_id)
@@ -219,7 +231,7 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
             for photo in photos
         ):
             raise ValueError("Owner photo unavailable")
-        idea = IDEAS[caption_index]
+        idea = caption_for_topic(caption_index)
         caption = idea["caption"]
         draft_id = await add_photo_draft(change_memory, archive_id, owner_id, caption)
         kb = InlineKeyboardMarkup(inline_keyboard=[
