@@ -23,3 +23,10 @@ def test_readable_safe_permission_report():
 def test_unavailable_and_invalid_reports():
     assert "дійсний" in render_permissions_report({"status": "invalid_token"})
     assert "не вдалося" in render_permissions_report({"status": "network_error"})
+
+
+def test_meta_code_200_is_actionable_and_not_token_revocation():
+    msg = render_permissions_report({"status": "check_unavailable", "http": 400, "code": "200"})
+    assert "200" in msg
+    assert "System users" in msg
+    assert "не доводить" in msg
