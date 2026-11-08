@@ -17,6 +17,7 @@ from instagram_oauth import install_instagram_oauth
 from instagram_webhook import install_instagram_webhook
 from instagram_messaging import create_instagram_message_handler
 from instagram_handoff import list_dialogs, set_dialog_mode
+from instagram_menu import install_instagram_menu, daily_report_loop
 from instagram_growth import weekly_plan, add_draft, approve_draft, queue_summary, publisher_loop, fetch_account_overview, save_growth_snapshot
 from PIL import Image, UnidentifiedImageError
 from aiogram import Bot, Dispatcher, F, types
@@ -1171,6 +1172,35 @@ def instagram_owner_private(message):
         and (message.from_user.username or "").casefold() == ADMIN_USERNAME.casefold()
         and message.chat.type == "private"
     )
+
+
+async def create_instagram_caption_for_menu(topic):
+    response = await asyncio.wait_for(
+        asyncio.to_thread(
+            groq_client.chat.completions.create,
+            model=GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": (
+                    "Write one natural, playful, short English Instagram caption for Nastya Tsarapka, "
+                    "a clearly identified fictional AI character. Warm, witty, casual, never salesy. "
+                    "Include one engaging question and 3-5 relevant hashtags, not generic spam tags. "
+                    "Never claim literal real-life experiences or affiliations. Return only the caption."
+                )},
+                {"role": "user", "content": topic},
+            ],
+            temperature=0.75,
+            **completion_options(450),
+        ),
+        timeout=32,
+    )
+    return (response.choices[0].message.content or "").strip()[:1200]
+
+
+async def archive_instagram_menu_photo(message):
+    await receive_archived_image(message, message.photo[-1], False)
+
+
+install_instagram_menu(dp, bot, ADMIN_USERNAME, read_memory, change_memory, create_instagram_caption_for_menu, archive_instagram_menu_photo)
 
 
 @dp.message(Command("ig_stats"))
@@ -2366,6 +2396,7 @@ async def start_web():
 async def main():
     runner = None
     publisher_task = None
+    instagram_report_task = None
 
     try:
         await initialize_memory()
@@ -2377,6 +2408,7 @@ async def main():
         runner = await start_web()
         if drive_store is not None:
             publisher_task = asyncio.create_task(publisher_loop(read_memory, change_memory))
+            instagram_report_task = asyncio.create_task(daily_report_loop(bot, read_memory, change_memory))
         event("BOT", "MISSY STARTED")
         automation_features.engine.start()
         event('AUTOMATION_BACKEND','configured; awaiting successful state read' if getattr(drive_store,'automation_ready',False) else 'waiting for Apps Script update; existing bot features remain active')
@@ -2387,6 +2419,12 @@ async def main():
         )
 
     finally:
+        if instagram_report_task is not None:
+            instagram_report_task.cancel()
+            try:
+                await instagram_report_task
+            except asyncio.CancelledError:
+                pass
         if publisher_task is not None:
             publisher_task.cancel()
             try:
