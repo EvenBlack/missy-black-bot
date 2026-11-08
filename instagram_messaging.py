@@ -19,7 +19,17 @@ async def send_instagram_text(ig_user_id, recipient_id, text):
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
         async with session.post(url, json=payload, headers={"Authorization": f"Bearer {token}"}) as response:
             if response.status >= 400:
-                logger.error("Instagram send failed: HTTP %s", response.status)
+                try:
+                    body = await response.json(content_type=None)
+                    err = body.get("error", {}) if isinstance(body, dict) else {}
+                    if not isinstance(err, dict):
+                        err = {}
+                    # Never log access tokens, request bodies, recipient IDs, or Meta error messages.
+                    logger.error("INSTAGRAM_SEND_REJECTED http=%s type=%s code=%s subcode=%s",
+                                 response.status, str(err.get("type", ""))[:64],
+                                 str(err.get("code", ""))[:16], str(err.get("error_subcode", ""))[:16])
+                except Exception:
+                    logger.error("INSTAGRAM_SEND_REJECTED http=%s response_unparseable", response.status)
                 raise RuntimeError("Instagram API rejected message")
             return await response.json(content_type=None)
 
