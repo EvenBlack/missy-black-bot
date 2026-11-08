@@ -11,7 +11,7 @@ from aiogram import F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BufferedInputFile
 
-from instagram_growth import weekly_plan, queue_summary, fetch_account_overview, save_growth_snapshot, add_photo_draft, approve_draft, discard_draft, publish_one_now, mark_manual_publication
+from instagram_growth import weekly_plan, queue_summary, fetch_account_overview, save_growth_snapshot, add_photo_draft, approve_draft, discard_draft, publish_one_now, mark_manual_publication, weekly_growth_report
 from instagram_handoff import list_dialogs, set_dialog_mode
 from instagram_permissions import check_instagram_permissions, render_permissions_report
 from instagram_editorial import editorial_idea, editorial_week, render_editorial_idea
@@ -23,7 +23,8 @@ KYIV = ZoneInfo("Europe/Kyiv")
 def menu_keyboard():
     b = lambda label, action: InlineKeyboardButton(text=label, callback_data="igmenu:" + action)
     return InlineKeyboardMarkup(inline_keyboard=[
-        [b("📊 Підписники", "stats"), b("📅 План на тиждень", "plan")],
+        [b("📊 Підписники", "stats"), b("📈 Приріст за 7 днів", "trends")],
+        [b("📅 План на тиждень", "plan")],
         [b("📝 Ідея на сьогодні", "idea"), b("📚 Ідеї на 7 днів", "ideasweek")],
         [b("✍️ Підпис до фото", "caption"), b("🖼 Підготувати допис", "photo")],
         [b("📋 Черга дописів", "queue"), b("💬 Instagram Direct", "dialogs")],
@@ -290,6 +291,14 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
                 await message.answer(render_editorial_idea(editorial_idea(day)), reply_markup=menu_keyboard())
             except ValueError:
                 await message.answer("Цю дату вже не знайдено. Відкрий план ще раз.")
+        elif action == "trends":
+            try:
+                await message.answer(
+                    weekly_growth_report(await read_memory()),
+                    reply_markup=menu_keyboard(),
+                )
+            except Exception:
+                await message.answer("Історія підписників поки недоступна.", reply_markup=menu_keyboard())
         elif action == "stats":
             try:
                 overview = await fetch_account_overview(read_memory)
