@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import os
+import random
 
 import aiohttp
 
@@ -41,11 +42,20 @@ def create_instagram_message_handler(groq_client, model, completion_options, rea
     conversations = {}
     processed = set()
     user_locks = {}
+    pending = {}
+    timers = {}
+
+    def delay_seconds(text):
+        """Random quiet period, longer for longer input; never mark DM as read."""
+        minimum = max(0.0, min(180.0, float(os.getenv("INSTAGRAM_REPLY_DELAY_MIN_SECONDS", "45"))))
+        maximum = max(minimum, min(180.0, float(os.getenv("INSTAGRAM_REPLY_DELAY_MAX_SECONDS", "90"))))
+        low = min(maximum, minimum + (20 if len(text) > 160 else 0))
+        return random.uniform(low, maximum)
 
     async def handle(sender_id, recipient_id, text, message_id):
         if read_memory is not None and change_memory is not None:
             try:
-                await register_dialog(change_memory, read_memory, sender_id)
+                await register_dialog(change_memory, read_memory, sender_id, recipient_id)
                 if not await allow_automatic_reply(read_memory, sender_id):
                     logger.info("INSTAGRAM_HUMAN_HANDOFF automated_reply_skipped")
                     return
@@ -78,8 +88,34 @@ def create_instagram_message_handler(groq_client, model, completion_options, rea
                 except Exception as exc:
                     logger.error("INSTAGRAM_TEST_REPLY failed: %s", type(exc).__name__)
                 return
-            history = conversations.setdefault(sender_id, [])
             user_text = text.strip()[len(ai_test_prefix):].strip() if ai_test else text
+            batch = pending.setdefault(sender_id, [])
+            batch.append(user_text)
+            # A new message restarts the quiet period; reply once to the whole burst.
+            earlier = timers.pop(sender_id, None)
+            if earlier and not earlier.done():
+                earlier.cancel()
+            delay = delay_seconds("\\n".join(batch))
+            async def delayed_reply():
+                try:
+                    await asyncio.sleep(delay)
+                    async with lock:
+                        combined = "\\n".join(pending.pop(sender_id, []))
+                        if not combined:
+                            return
+                        if read_memory is not None and not await allow_automatic_reply(read_memory, sender_id):
+                            return
+                        await generate_reply(sender_id, recipient_id, combined, ai_test)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.error("Instagram delayed reply error: %s", type(exc).__name__)
+            task = asyncio.create_task(delayed_reply())
+            timers[sender_id] = task
+            return
+
+    async def generate_reply(sender_id, recipient_id, user_text, ai_test):
+            history = conversations.setdefault(sender_id, [])
             messages = [
                 {"role": "system", "content": (
                     "You are Nastya Tsarapka, a fictional AI character whose Instagram profile identifies her as AI. "
