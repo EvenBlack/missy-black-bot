@@ -26,3 +26,31 @@ def test_report_contains_only_status_not_raw_data():
 def test_owner_menu_links_to_read_only_diagnostic():
     actions = [button.callback_data for row in menu_keyboard().inline_keyboard for button in row]
     assert "igmenu:loginpath" in actions
+
+
+import pytest
+import instagram_login_diagnostic as diag
+
+
+@pytest.mark.asyncio
+async def test_standard_meta_graph_version_does_not_abort_before_probe(monkeypatch):
+    monkeypatch.setenv("INSTAGRAM_ACCESS_TOKEN", "test-secret-not-a-real-token")
+    monkeypatch.setenv("META_GRAPH_VERSION", "v27.0")
+    monkeypatch.setenv("INSTAGRAM_ACCOUNT_ID", "123")
+    seen = []
+    async def fake_probe(host, token, version, expected_id, session):
+        seen.append((host, version))
+        return "recognized_account"
+    class FakeSession:
+        def __init__(self, **kwargs):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+    monkeypatch.setattr(diag, "probe_token_host", fake_probe)
+    monkeypatch.setattr(diag.aiohttp, "ClientSession", FakeSession)
+    result = await diag.check_login_path()
+    assert result["status"] == "ok"
+    assert len(seen) == 2
+    assert all(version == "v27.0" for _, version in seen)
