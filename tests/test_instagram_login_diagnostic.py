@@ -25,7 +25,7 @@ def test_report_contains_only_status_not_raw_data():
 
 def test_owner_menu_links_to_read_only_diagnostic():
     actions = [button.callback_data for row in menu_keyboard().inline_keyboard for button in row]
-    assert "igmenu:loginpath" in actions
+    assert "igmenu:accountread" in actions  # Replaced less-representative /me probe
 
 
 import pytest
