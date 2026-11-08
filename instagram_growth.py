@@ -7,6 +7,8 @@ import asyncio
 from datetime import datetime, timezone
 import logging
 import os
+import secrets
+from instagram_media import signed_media_url
 from urllib.parse import urlparse
 
 import aiohttp
@@ -76,6 +78,50 @@ async def add_draft(change_memory, read_memory, image_url, caption, due_at):
         }
     await change_memory(update)
     return draft_id
+
+
+async def add_photo_draft(change_memory, archive_id, owner_id, caption):
+    """Draft a Telegram-uploaded Drive photo without making it public yet.
+
+    Approval allows Meta to retrieve this photo, but global publishing stays disabled.
+    """
+    if not isinstance(caption, str) or not caption.strip() or len(caption) > 2200:
+        raise ValueError("Instagram caption required")
+    if not isinstance(archive_id, str) or len(archive_id) != 24:
+        raise ValueError("Invalid archived photo")
+    if not str(owner_id).isdigit():
+        raise ValueError("Invalid owner")
+    now = datetime.now(timezone.utc)
+    due = now + __import__("datetime").timedelta(minutes=1)
+    expiry = int((now + __import__("datetime").timedelta(days=7)).timestamp())
+    base = os.getenv("INSTAGRAM_PUBLIC_BASE_URL", "https://missy-black-bot.onrender.com")
+    draft_id = secrets.token_hex(4)
+    url = signed_media_url(base, draft_id, archive_id, owner_id, expiry)
+
+    def update(data):
+        queue = data.setdefault("instagram_publish_queue", {})
+        if not isinstance(queue, dict) or len(queue) >= 150:
+            raise ValueError("Instagram queue full")
+        queue[draft_id] = {
+            "status": "draft", "image_url": url,
+            "caption": caption.strip(),
+            "due_at": due.isoformat(timespec="seconds"),
+            "created_at": now.isoformat(timespec="seconds"),
+            "photo_archive_id": archive_id,
+            "photo_owner_id": str(owner_id),
+        }
+    await change_memory(update)
+    return draft_id
+
+
+async def discard_draft(change_memory, draft_id):
+    def update(data):
+        record = data.get("instagram_publish_queue", {}).get(draft_id)
+        if not isinstance(record, dict) or record.get("status") != "draft":
+            raise ValueError("Only unapproved drafts may be discarded")
+        record["status"] = "cancelled"
+        record.pop("image_url", None)
+    await change_memory(update)
 
 
 async def approve_draft(change_memory, read_memory, draft_id):
