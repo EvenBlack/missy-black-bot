@@ -15,17 +15,17 @@ def sample(status="approved", owner="123"):
 
 def test_only_the_target_post_is_eligible():
     state = {"instagram_publish_queue": {
-        "1234abcd": sample(),
+        "f6acf245": sample(),
         "1234abce": {**sample(), "caption": "Other photo"},
         "1234abcf": {**sample(), "status": "draft"},
         "1234abc0": {**sample(), "created_at": "2026-11-09T13:34:00+00:00"},
     }}
-    assert [k for k, _ in eligible_drafts(state)] == ["1234abcd"]
+    assert [k for k, _ in eligible_drafts(state)] == ["f6acf245"]
 
 
 @pytest.mark.asyncio
 async def test_one_shot_requires_enable_and_verifies_existing_post(monkeypatch):
-    state = {"instagram_publish_queue": {"1234abcd": sample()}, "instagram_account_id": "1789001",
+    state = {"instagram_publish_queue": {"f6acf245": sample()}, "instagram_account_id": "1789001",
              "instagram_morning_report": {"chat_id": 98}}
     async def read():
         return copy.deepcopy(state)
@@ -43,14 +43,14 @@ async def test_one_shot_requires_enable_and_verifies_existing_post(monkeypatch):
     assert await one_shot_first_post(Bot(), read, change, existing, fail_publish) == "disabled"
     monkeypatch.setenv("INSTAGRAM_FIRST_POST_ENABLED", "true")
     assert await one_shot_first_post(Bot(), read, change, existing, fail_publish) == "existing"
-    assert state["instagram_publish_queue"]["1234abcd"]["status"] == "published"
+    assert state["instagram_publish_queue"]["f6acf245"]["status"] == "published"
     assert len(calls) == 1
     assert await one_shot_first_post(Bot(), read, change, existing, fail_publish) == "not_ready"
 
 
 @pytest.mark.asyncio
 async def test_one_shot_publishes_once_only_after_verified_no_existing(monkeypatch):
-    state = {"instagram_publish_queue": {"1234abcd": sample()}, "instagram_account_id": "1789001"}
+    state = {"instagram_publish_queue": {"f6acf245": sample()}, "instagram_account_id": "1789001"}
     async def read():
         return copy.deepcopy(state)
     async def change(fn):
@@ -64,7 +64,7 @@ async def test_one_shot_publishes_once_only_after_verified_no_existing(monkeypat
         return None
     async def publish(read_memory, change_memory, draft_id, owner):
         counts.append("publish")
-        assert draft_id == "1234abcd" and owner == "123"
+        assert draft_id == "f6acf245" and owner == "123"
         def finish(data):
             data["instagram_publish_queue"][draft_id]["status"] = "published"
         await change_memory(finish)
@@ -77,7 +77,7 @@ async def test_one_shot_publishes_once_only_after_verified_no_existing(monkeypat
 
 @pytest.mark.asyncio
 async def test_one_shot_never_publishes_when_verification_fails(monkeypatch):
-    state = {"instagram_publish_queue": {"1234abcd": sample()}, "instagram_account_id": "1789001"}
+    state = {"instagram_publish_queue": {"f6acf245": sample()}, "instagram_account_id": "1789001"}
     async def read():
         return copy.deepcopy(state)
     async def change(fn):
@@ -88,4 +88,4 @@ async def test_one_shot_never_publishes_when_verification_fails(monkeypatch):
         raise AssertionError("Cannot publish without verification")
     monkeypatch.setenv("INSTAGRAM_FIRST_POST_ENABLED", "true")
     assert await one_shot_first_post(None, read, change, fail_check, publish) == "verification_blocked"
-    assert state["instagram_publish_queue"]["1234abcd"]["status"] == "approved"
+    assert state["instagram_publish_queue"]["f6acf245"]["status"] == "approved"
