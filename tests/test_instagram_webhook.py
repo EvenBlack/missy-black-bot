@@ -75,3 +75,46 @@ async def test_no_auto_reply_by_default(monkeypatch):
     # The scheduled task is disabled by default and creates no outgoing request.
     import asyncio
     await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_instagram_send_uses_instagram_graph_and_account_id(monkeypatch):
+    import instagram_messaging
+    monkeypatch.setenv("INSTAGRAM_ACCESS_TOKEN", "test-token")
+    monkeypatch.setenv("META_GRAPH_VERSION", "v25.0")
+    recorded = {}
+
+    class FakeResponse:
+        status = 200
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return None
+        async def json(self, content_type=None):
+            return {"message_id": "success"}
+
+    class FakeSession:
+        def __init__(self, timeout):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return None
+        def post(self, url, json, headers):
+            recorded.update(url=url, payload=json, headers=headers)
+            return FakeResponse()
+
+    monkeypatch.setattr(instagram_messaging.aiohttp, "ClientSession", FakeSession)
+    answer = await instagram_messaging.send_instagram_text("123456", "998877", "Привіт")
+    assert answer == {"message_id": "success"}
+    assert recorded["url"] == "https://graph.instagram.com/v25.0/123456/messages"
+    assert recorded["payload"] == {"recipient": {"id": "998877"}, "message": {"text": "Привіт"}}
+    assert recorded["headers"]["Authorization"] == "Bearer test-token"
+
+
+@pytest.mark.asyncio
+async def test_instagram_send_without_token_is_blocked(monkeypatch):
+    import instagram_messaging
+    monkeypatch.delenv("INSTAGRAM_ACCESS_TOKEN", raising=False)
+    with pytest.raises(RuntimeError, match="Instagram Login token"):
+        await instagram_messaging.send_instagram_text("123456", "998877", "Hello")
