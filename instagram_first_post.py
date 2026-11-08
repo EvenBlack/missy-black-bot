@@ -14,6 +14,7 @@ from instagram_growth import publish_one_now
 
 log = logging.getLogger("instagram_first_post")
 CAPTION_START = "Coffee, messy curls, and crunchy autumn leaves"
+TARGET_DRAFT_ID = "f6acf245"  # Owner-visible approved autumn photo draft, screenshot 2026-11-08
 EARLIEST = datetime(2026, 11, 8, 12, 0, tzinfo=timezone.utc)
 LATEST = datetime(2026, 11, 8, 15, 0, tzinfo=timezone.utc)
 
@@ -24,6 +25,8 @@ def eligible_drafts(state):
         return []
     valid = []
     for key, item in queue.items():
+        if key != TARGET_DRAFT_ID:
+            continue
         if not isinstance(item, dict) or item.get("status") != "approved":
             continue
         if not str(item.get("caption", "")).startswith(CAPTION_START):
