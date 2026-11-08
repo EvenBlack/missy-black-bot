@@ -86,3 +86,23 @@ async def test_report_when_meta_unavailable_does_not_fabricate_count():
                                    fake_fetch)
     assert len(sent) == 1
     assert "недоступна" in sent[0][1]
+
+
+@pytest.mark.asyncio
+async def test_new_subscription_schedules_next_day_and_no_late_delivery():
+    from datetime import timedelta
+    state = {}
+    async def read():
+        return copy.deepcopy(state)
+    async def change(updater):
+        updater(state)
+        return copy.deepcopy(state)
+    await enable_report(change, 123)
+    sub = state["instagram_morning_report"]
+    today = datetime.now(KYIV).date()
+    assert sub["first_date"] == (today + timedelta(days=1)).isoformat()
+    late_today = datetime.combine(today, datetime.min.time(), tzinfo=KYIV).replace(hour=14)
+    assert not should_send(late_today, sub)
+    at_nine_tomorrow = datetime.combine(today + timedelta(days=1), datetime.min.time(), tzinfo=KYIV).replace(hour=9)
+    assert should_send(at_nine_tomorrow, sub)
+    assert not should_send(at_nine_tomorrow.replace(hour=10), sub)
