@@ -1174,7 +1174,33 @@ def instagram_owner_private(message):
     )
 
 
-install_instagram_menu(dp, bot, ADMIN_USERNAME, read_memory, change_memory)
+async def create_instagram_caption_for_menu(topic):
+    response = await asyncio.wait_for(
+        asyncio.to_thread(
+            groq_client.chat.completions.create,
+            model=GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": (
+                    "Write one natural, playful, short English Instagram caption for Nastya Tsarapka, "
+                    "a clearly identified fictional AI character. Warm, witty, casual, never salesy. "
+                    "Include one engaging question and 3-5 relevant hashtags, not generic spam tags. "
+                    "Never claim literal real-life experiences or affiliations. Return only the caption."
+                )},
+                {"role": "user", "content": topic},
+            ],
+            temperature=0.75,
+            **completion_options(450),
+        ),
+        timeout=32,
+    )
+    return (response.choices[0].message.content or "").strip()[:1200]
+
+
+async def archive_instagram_menu_photo(message):
+    await receive_archived_image(message, message.photo[-1], False)
+
+
+install_instagram_menu(dp, bot, ADMIN_USERNAME, read_memory, change_memory, create_instagram_caption_for_menu, archive_instagram_menu_photo)
 
 
 @dp.message(Command("ig_stats"))
