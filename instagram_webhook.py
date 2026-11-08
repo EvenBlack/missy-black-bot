@@ -2,9 +2,12 @@
 import hashlib
 import hmac
 import json
+import logging
 import os
 
 from aiohttp import web
+
+logger = logging.getLogger("instagram_webhook")
 
 
 def install_instagram_webhook(app, on_message=None):
@@ -37,7 +40,9 @@ def install_instagram_webhook(app, on_message=None):
         except (ValueError, UnicodeDecodeError):
             raise web.HTTPBadRequest(text="Invalid JSON")
         if not isinstance(payload, dict) or payload.get("object") != "instagram":
+            logger.info("INSTAGRAM_WEBHOOK ignored_unrecognized_object")
             return web.Response(text="ignored")
+        logger.info("INSTAGRAM_WEBHOOK signed_event_received entries=%s", len(payload.get("entry", [])))
         if on_message is not None:
             for entry in payload.get("entry", []):
                 if not isinstance(entry, dict):
@@ -57,6 +62,7 @@ def install_instagram_webhook(app, on_message=None):
                     recipient_id = recipient.get("id")
                     message_id = message.get("mid")
                     if isinstance(text, str) and text.strip() and sender_id and recipient_id and message_id:
+                        logger.info("INSTAGRAM_WEBHOOK text_event_accepted")
                         await on_message(str(sender_id), str(recipient_id), text[:4000], str(message_id))
         return web.Response(text="EVENT_RECEIVED")
 
