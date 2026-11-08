@@ -5,6 +5,8 @@ import os
 
 import aiohttp
 
+from instagram_handoff import register_dialog, allow_automatic_reply
+
 logger = logging.getLogger("instagram_messaging")
 
 
@@ -34,13 +36,22 @@ async def send_instagram_text(ig_user_id, recipient_id, text):
             return await response.json(content_type=None)
 
 
-def create_instagram_message_handler(groq_client, model, completion_options):
+def create_instagram_message_handler(groq_client, model, completion_options, read_memory=None, change_memory=None):
     """Returns a webhook callback with isolated per-sender conversation context."""
     conversations = {}
     processed = set()
     user_locks = {}
 
     async def handle(sender_id, recipient_id, text, message_id):
+        if read_memory is not None and change_memory is not None:
+            try:
+                await register_dialog(change_memory, read_memory, sender_id)
+                if not await allow_automatic_reply(read_memory, sender_id):
+                    logger.info("INSTAGRAM_HUMAN_HANDOFF automated_reply_skipped")
+                    return
+            except Exception:
+                logger.error("INSTAGRAM_HUMAN_HANDOFF storage_error_reply_blocked")
+                return
         test_phrase = os.getenv("INSTAGRAM_REPLY_TEST_PHRASE", "").strip()
         static_test = bool(test_phrase) and text.strip() == test_phrase
         ai_test_prefix = os.getenv("INSTAGRAM_AI_TEST_PREFIX", "").strip()
@@ -60,6 +71,8 @@ def create_instagram_message_handler(groq_client, model, completion_options):
                 processed.add(message_id)
             if static_test:
                 try:
+                    if read_memory is not None and not await allow_automatic_reply(read_memory, sender_id):
+                        return
                     await send_instagram_text(recipient_id, sender_id, "Тест Instagram успішний! Повідомлення доставлено через Міссі Блек.")
                     logger.info("INSTAGRAM_TEST_REPLY sent")
                 except Exception as exc:
@@ -99,6 +112,8 @@ def create_instagram_message_handler(groq_client, model, completion_options):
                 if not answer:
                     return
                 # Instagram API limits text; keep a single concise reply.
+                if read_memory is not None and not await allow_automatic_reply(read_memory, sender_id):
+                    return
                 await send_instagram_text(recipient_id, sender_id, answer)
                 history.extend([
                     {"role": "user", "content": user_text},
