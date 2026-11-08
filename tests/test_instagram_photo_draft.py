@@ -96,3 +96,53 @@ async def test_explicit_publish_failed_meta_does_not_retry(monkeypatch):
     with pytest.raises(ValueError):
         await publish_one_now(read, change, key, 1234, fail_publish)
     assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_quick_duplicate_click_reuses_same_unapproved_photo_draft(monkeypatch):
+    monkeypatch.setenv("META_TOKEN_ENCRYPTION_KEY", "1" * 64)
+    state = {}
+    async def change(fn):
+        fn(state)
+    first = await add_photo_draft(change, "a" * 24, 1234, "Fashion caption")
+    again = await add_photo_draft(change, "a" * 24, 1234, "Fashion caption")
+    assert first == again
+    assert len(state["instagram_publish_queue"]) == 1
+    assert state["instagram_publish_queue"][first]["status"] == "draft"
+    different_topic = await add_photo_draft(change, "a" * 24, 1234, "Beauty caption")
+    assert different_topic != first
+    different_owner = await add_photo_draft(change, "a" * 24, 9999, "Fashion caption")
+    assert different_owner not in (first, different_topic)
+    different_photo = await add_photo_draft(change, "b" * 24, 1234, "Fashion caption")
+    assert different_photo not in (first, different_topic, different_owner)
+    assert len(state["instagram_publish_queue"]) == 4
+
+
+@pytest.mark.asyncio
+async def test_approved_and_old_drafts_are_not_reused(monkeypatch):
+    from datetime import timedelta
+    monkeypatch.setenv("META_TOKEN_ENCRYPTION_KEY", "1" * 64)
+    state = {}
+    async def read():
+        return copy.deepcopy(state)
+    async def change(fn):
+        fn(state)
+    first = await add_photo_draft(change, "a" * 24, 1234, "Same photo")
+    await approve_draft(change, read, first)
+    second = await add_photo_draft(change, "a" * 24, 1234, "Same photo")
+    assert second != first
+    state["instagram_publish_queue"][second]["created_at"] = (
+        datetime.now(timezone.utc) - timedelta(minutes=4)
+    ).isoformat()
+    third = await add_photo_draft(change, "a" * 24, 1234, "Same photo")
+    assert third not in (first, second)
+
+
+@pytest.mark.asyncio
+async def test_draft_photo_id_requires_hex_archive_id(monkeypatch):
+    monkeypatch.setenv("META_TOKEN_ENCRYPTION_KEY", "1" * 64)
+    async def change(fn):
+        raise AssertionError("Should never write an invalid archive ID")
+    for bad in ("x" * 24, "a" * 23, "a" * 25, "A" * 24):
+        with pytest.raises(ValueError):
+            await add_photo_draft(change, bad, 1234, "Valid caption")
