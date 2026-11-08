@@ -1186,7 +1186,12 @@ async def create_instagram_caption_for_menu(topic):
                     "Write one natural, playful, short English Instagram caption for Nastya Tsarapka, "
                     "a clearly identified fictional AI character. Warm, witty, casual, never salesy. "
                     "Include one engaging question and 3-5 relevant hashtags, not generic spam tags. "
-                    "Never claim literal real-life experiences or affiliations. Return only the caption."
+                    "Never claim literal real-life experiences or affiliations. "
+                    "Return TWO sections: 'English:' followed by the English caption and original hashtags, "
+                    "then 'Український переклад:' followed by a faithful Ukrainian translation, "
+                    "including an explanation of the meaning of hashtags. "
+                    "The Ukrainian part is for the owner only and must never be published. "
+                    "Never omit the translation."
                 )},
                 {"role": "user", "content": topic},
             ],
@@ -1195,7 +1200,7 @@ async def create_instagram_caption_for_menu(topic):
         ),
         timeout=32,
     )
-    return (response.choices[0].message.content or "").strip()[:1200]
+    return (response.choices[0].message.content or "").strip()[:2200]
 
 
 async def archive_instagram_menu_photo(message):
