@@ -11,9 +11,10 @@ from aiogram import F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BufferedInputFile
 
-from instagram_growth import weekly_plan, queue_summary, fetch_account_overview, save_growth_snapshot, add_photo_draft, approve_draft, discard_draft, publish_one_now
+from instagram_growth import weekly_plan, queue_summary, fetch_account_overview, save_growth_snapshot, add_photo_draft, approve_draft, discard_draft, publish_one_now, mark_manual_publication
 from instagram_handoff import list_dialogs, set_dialog_mode
 from instagram_permissions import check_instagram_permissions, render_permissions_report
+from instagram_editorial import editorial_idea, editorial_week, render_editorial_idea
 
 log = logging.getLogger("instagram_menu")
 KYIV = ZoneInfo("Europe/Kyiv")
@@ -23,6 +24,7 @@ def menu_keyboard():
     b = lambda label, action: InlineKeyboardButton(text=label, callback_data="igmenu:" + action)
     return InlineKeyboardMarkup(inline_keyboard=[
         [b("📊 Підписники", "stats"), b("📅 План на тиждень", "plan")],
+        [b("📝 Ідея на сьогодні", "idea"), b("📚 Ідеї на 7 днів", "ideasweek")],
         [b("✍️ Підпис до фото", "caption"), b("🖼 Підготувати допис", "photo")],
         [b("📋 Черга дописів", "queue"), b("💬 Instagram Direct", "dialogs")],
         [b("🔐 Дозволи Meta", "permissions"), b("🔔 Звіт о 09:00", "report")],
@@ -264,6 +266,30 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
             lines = ["📅 Контент-план Насті на 7 днів:"]
             lines += [f"{r['day']}. {r['topic']}: {r['idea']}" for r in weekly_plan()]
             await message.answer("\n".join(lines), reply_markup=menu_keyboard())
+        elif action == "idea":
+            await message.answer(render_editorial_idea(editorial_idea()), reply_markup=menu_keyboard())
+        elif action == "ideasweek":
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text=f"{idea['date']} · {idea['topic']}",
+                    callback_data="igmenu:idea:" + idea["date"],
+                )]
+                for idea in editorial_week()
+            ] + [[InlineKeyboardButton(text="⬅️ Меню", callback_data="igmenu:home")]])
+            await message.answer(
+                "📚 Сім підготовлених англомовних ідей. Обери дату для тексту й кадру:",
+                reply_markup=kb,
+            )
+        elif action.startswith("idea:"):
+            from datetime import date
+            try:
+                day = date.fromisoformat(action.partition(":")[2])
+                from datetime import timedelta
+                if not datetime.now(KYIV).date() <= day <= datetime.now(KYIV).date() + timedelta(days=7):
+                    raise ValueError("Date outside current editorial week")
+                await message.answer(render_editorial_idea(editorial_idea(day)), reply_markup=menu_keyboard())
+            except ValueError:
+                await message.answer("Цю дату вже не знайдено. Відкрий план ще раз.")
         elif action == "stats":
             try:
                 overview = await fetch_account_overview(read_memory)
@@ -382,6 +408,37 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
                 )
             except Exception as exc:
                 await message.answer(str(exc)[:400], reply_markup=menu_keyboard())
+        elif action.startswith("manualask:"):
+            draft_id = action.partition(":")[2]
+            if not __import__("re").fullmatch(r"[a-f0-9]{8}", draft_id):
+                return
+            entries = dict(await queue_summary(read_memory))
+            item = entries.get(draft_id)
+            if (not isinstance(item, dict)
+                    or item.get("status") not in ("draft", "approved", "publishing")
+                    or item.get("photo_owner_id") != str(query.from_user.id)):
+                await message.answer("Цей допис уже позначений або недоступний.")
+                return
+            await message.answer(
+                f"📌 Підтверди: ти вже сам опублікував допис {draft_id} у Meta Business Suite? "
+                "Це лише оновить стан чернетки, нічого не надішле в Instagram.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="✅ Так, уже опубліковано вручну",
+                                          callback_data="igmenu:manualconfirm:" + draft_id)],
+                    [InlineKeyboardButton(text="⬅️ Скасувати", callback_data="igmenu:queue")],
+                ]),
+            )
+        elif action.startswith("manualconfirm:"):
+            draft_id = action.partition(":")[2]
+            try:
+                await mark_manual_publication(change_memory, read_memory, draft_id, query.from_user.id)
+                await message.answer(
+                    "✅ Позначено як опублікований вручну. Міссі не повторюватиме "
+                    "автоматичну публікацію цієї чернетки.",
+                    reply_markup=menu_keyboard(),
+                )
+            except ValueError:
+                await message.answer("Не вдалося змінити стан: чернетка вже змінена або недоступна.")
         elif action == "queue":
             try:
                 items = await queue_summary(read_memory)
@@ -389,11 +446,17 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
                 buttons = []
                 for key, item in items[-10:]:
                     lines.append(f"{key}: {item.get('status', '?')} — {item.get('due_at', '?')}")
-                    if item.get("status") == "approved" and item.get("photo_owner_id") == str(query.from_user.id):
-                        buttons.append([InlineKeyboardButton(
-                            text="🚀 Опублікувати зараз · " + key,
-                            callback_data="igmenu:publishask:" + key,
-                        )])
+                    if item.get("photo_owner_id") == str(query.from_user.id):
+                        if item.get("status") == "approved":
+                            buttons.append([InlineKeyboardButton(
+                                text="🚀 Опублікувати зараз · " + key,
+                                callback_data="igmenu:publishask:" + key,
+                            )])
+                        if item.get("status") in ("draft", "approved", "publishing"):
+                            buttons.append([InlineKeyboardButton(
+                                text="📌 Уже опублікував вручну · " + key,
+                                callback_data="igmenu:manualask:" + key,
+                            )])
                 buttons.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="igmenu:home")])
                 await message.answer(
                     "\n".join(lines) if items else "Черга дописів порожня.",
