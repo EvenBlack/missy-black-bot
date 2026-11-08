@@ -17,6 +17,7 @@ from instagram_oauth import install_instagram_oauth
 from instagram_webhook import install_instagram_webhook
 from instagram_messaging import create_instagram_message_handler
 from instagram_handoff import list_dialogs, set_dialog_mode
+from instagram_growth import weekly_plan, add_draft, approve_draft, queue_summary, publisher_loop
 from PIL import Image, UnidentifiedImageError
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
@@ -1164,6 +1165,117 @@ async def start_command(message: types.Message):
     )
 
 
+def instagram_owner_private(message):
+    return bool(
+        message.from_user
+        and (message.from_user.username or "").casefold() == ADMIN_USERNAME.casefold()
+        and message.chat.type == "private"
+    )
+
+
+@dp.message(Command("ig_plan"))
+async def instagram_plan_command(message: types.Message):
+    if not instagram_owner_private(message):
+        return
+    rows = weekly_plan()
+    await message.answer(
+        "Настя: 7-денний план для англомовної аудиторії:\\n"
+        + "\\n".join(f"{row['day']}. {row['topic']}: {row['idea']}" for row in rows)
+        + "\\nЦе ідеї, не опубліковані дописи."
+    )
+
+
+@dp.message(Command("ig_caption"))
+async def instagram_caption_command(message: types.Message):
+    if not instagram_owner_private(message):
+        return
+    topic = (message.text or "").partition(" ")[2].strip()[:180]
+    if not topic:
+        await message.answer("Приклад: /ig_caption funny curly hair day")
+        return
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(
+                groq_client.chat.completions.create,
+                model=GROQ_MODEL,
+                messages=[
+                    {"role": "system", "content":
+                        "Write one authentic, fun English Instagram caption for Nastya Tsarapka, "
+                        "a clearly labeled fictional AI character. Casual, warm, funny, not formal. "
+                        "Include 1 natural question, 3-6 relevant non-spammy hashtags and no fabricated "
+                        "real-life claims or unrequested sponsorship. Max 900 characters. "
+                        "Return only the caption. Do not publish anything."},
+                    {"role": "user", "content": topic},
+                ],
+                temperature=0.75,
+                **completion_options(450),
+            ), timeout=32,
+        )
+        caption = (result.choices[0].message.content or "").strip()[:1200]
+        await message.answer(caption or "Модель не повернула текст.")
+    except Exception:
+        await message.answer("Генерація підпису зараз недоступна.")
+
+
+@dp.message(Command("ig_schedule"))
+async def instagram_schedule_command(message: types.Message):
+    if not instagram_owner_private(message):
+        return
+    # Example: /ig_schedule 2026-11-10T14:00+02:00 https://example.com/pic.jpg | English caption #fashion
+    raw = (message.text or "").partition(" ")[2].strip()
+    left, sep, caption = raw.partition("|")
+    fields = left.split(maxsplit=1)
+    if not sep or len(fields) != 2 or not caption.strip():
+        await message.answer("Формат: /ig_schedule 2026-11-10T14:00+02:00 https://site.com/photo.jpg | English caption #style")
+        return
+    try:
+        from datetime import datetime
+        date = datetime.fromisoformat(fields[0])
+        if date.tzinfo is None:
+            raise ValueError("Timezone missing")
+        draft_id = await add_draft(change_memory, read_memory, fields[1], caption.strip(), date.isoformat())
+        await message.answer(
+            f"Чернетку створено: {draft_id}. Фото ще НЕ опубліковано. "
+            f"Перевір URL і текст, потім /ig_approve {draft_id}. "
+            "Публікації глобально вимкнені до окремого запуску."
+        )
+    except Exception:
+        await message.answer("Не вдалося створити чернетку. Перевір дату з часовим поясом, публічний HTTPS URL і підпис.")
+
+
+@dp.message(Command("ig_queue"))
+async def instagram_queue_command(message: types.Message):
+    if not instagram_owner_private(message):
+        return
+    try:
+        items = await queue_summary(read_memory)
+        if not items:
+            await message.answer("Черга Instagram порожня.")
+            return
+        lines = ["Instagram: останні заплановані дописи"]
+        for key, entry in items[-12:]:
+            lines.append(f"{key} | {entry.get('status')} | {entry.get('due_at')} | {str(entry.get('caption', ''))[:55]}")
+        lines.append("Публікації: " + ("УВІМКНЕНО" if os.getenv("INSTAGRAM_POSTING_ENABLED", "false").lower() == "true" else "ВИМКНЕНО"))
+        await message.answer("\\n".join(lines))
+    except Exception:
+        await message.answer("Черга зараз недоступна.")
+
+
+@dp.message(Command("ig_approve"))
+async def instagram_approve_command(message: types.Message):
+    if not instagram_owner_private(message):
+        return
+    draft_id = (message.text or "").partition(" ")[2].strip()
+    if not re.fullmatch(r"[a-f0-9]{8}", draft_id):
+        await message.answer("Приклад: /ig_approve 1234abcd")
+        return
+    try:
+        await approve_draft(change_memory, read_memory, draft_id)
+        await message.answer("Чернетку погоджено. Публікація відбудеться за розкладом лише після увімкнення публікатора.")
+    except Exception:
+        await message.answer("Не знайдено чернетку або вона вже погоджена.")
+
+
 @dp.message(Command("ig_dialogs"))
 async def instagram_dialogs_command(message: types.Message):
     if not message.from_user or (message.from_user.username or "").casefold() != ADMIN_USERNAME.casefold():
@@ -2230,6 +2342,7 @@ async def start_web():
 
 async def main():
     runner = None
+    publisher_task = None
 
     try:
         await initialize_memory()
@@ -2239,6 +2352,8 @@ async def main():
         event('ACCOUNT_IDENTITIES','confirmed account defaults ready')
         await bot.delete_webhook(drop_pending_updates=False)
         runner = await start_web()
+        if drive_store is not None:
+            publisher_task = asyncio.create_task(publisher_loop(read_memory, change_memory))
         event("BOT", "MISSY STARTED")
         automation_features.engine.start()
         event('AUTOMATION_BACKEND','configured; awaiting successful state read' if getattr(drive_store,'automation_ready',False) else 'waiting for Apps Script update; existing bot features remain active')
@@ -2249,6 +2364,12 @@ async def main():
         )
 
     finally:
+        if publisher_task is not None:
+            publisher_task.cancel()
+            try:
+                await publisher_task
+            except asyncio.CancelledError:
+                pass
         await automation_features.engine.stop()
         if runner:
             await runner.cleanup()
