@@ -93,10 +93,10 @@ async def queue_summary(read_memory):
     return sorted(_entries(data).items(), key=lambda row: row[1].get("due_at", ""))
 
 
-async def publish_image(image_url, caption):
+async def publish_image(image_url, caption, account_id=None):
     """Use the same Meta Facebook Graph domain already verified for Unified Login."""
     token = os.getenv("INSTAGRAM_ACCESS_TOKEN")
-    account = os.getenv("INSTAGRAM_ACCOUNT_ID")
+    account = account_id or os.getenv("INSTAGRAM_ACCOUNT_ID")
     if not token or not account or not account.isdigit():
         raise RuntimeError("Instagram token or account ID not configured")
     version = os.getenv("META_GRAPH_VERSION", "v27.0")
@@ -138,6 +138,10 @@ async def publish_due_once(read_memory, change_memory, publish_func=publish_imag
            if isinstance(item, dict) and item.get("status") == "approved"
            and datetime.fromisoformat(item["due_at"]) <= now]
     completed = 0
+    account_id = snapshot.get("instagram_account_id") or os.getenv("INSTAGRAM_ACCOUNT_ID")
+    if not account_id or not str(account_id).isdigit():
+        log.warning("INSTAGRAM_PUBLISH account_id_unavailable")
+        return 0
     for key, _ in sorted(due, key=lambda row: row[1]["due_at"])[:2]:
         claimed = False
         def claim(data):
@@ -151,7 +155,7 @@ async def publish_due_once(read_memory, change_memory, publish_func=publish_imag
             continue
         latest = _entries(await read_memory()).get(key, {})
         try:
-            media_id = await publish_func(latest["image_url"], latest["caption"])
+            media_id = await publish_func(latest["image_url"], latest["caption"], str(account_id))
         except Exception as exc:
             log.error("INSTAGRAM_PUBLISH queue_failure exception=%s", type(exc).__name__)
             # Leave as 'publishing', because an uncertain API outcome should not retry.
