@@ -134,6 +134,36 @@ async def approve_draft(change_memory, read_memory, draft_id):
     await change_memory(update)
 
 
+async def mark_manual_publication(change_memory, read_memory, draft_id, owner_id):
+    """Owner explicitly confirms that this archived photo was posted via Meta UI.
+
+    This only reconciles local state; it NEVER makes a Meta publishing request.
+    """
+    import re
+    if not re.fullmatch(r"[a-f0-9]{8}", str(draft_id)) or not str(owner_id).isdigit():
+        raise ValueError("Invalid draft or owner")
+    existing = _entries(await read_memory()).get(draft_id)
+    if (not isinstance(existing, dict)
+            or existing.get("status") not in ("draft", "approved", "publishing")
+            or existing.get("photo_owner_id") != str(owner_id)):
+        raise ValueError("Cannot reconcile this draft")
+    changed = False
+    def update(data):
+        nonlocal changed
+        item = data.get("instagram_publish_queue", {}).get(draft_id)
+        if (isinstance(item, dict)
+                and item.get("status") in ("draft", "approved", "publishing")
+                and item.get("photo_owner_id") == str(owner_id)):
+            item["status"] = "published_manual"
+            item["manual_confirmed_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            item.pop("image_url", None)  # Invalidate the signed preview URL.
+            changed = True
+    await change_memory(update)
+    if not changed:
+        raise ValueError("Draft already reconciled")
+    return True
+
+
 async def queue_summary(read_memory):
     data = await read_memory()
     return sorted(_entries(data).items(), key=lambda row: row[1].get("due_at", ""))
