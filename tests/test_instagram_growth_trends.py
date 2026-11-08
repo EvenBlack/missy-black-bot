@@ -10,13 +10,13 @@ def test_weekly_growth_observed_dates_only():
         "2026-11-04": {"followers": 7},
         "2026-11-08": {"followers": 8},
         "2026-11-09": {"followers": 100},
-        "2026-11-03": {"followers": 1},
+        "2026-11-01": {"followers": 1},
     }}
     text = weekly_growth_report(sample, date(2026, 11, 8))
     assert "2026-11-04: 7" in text
     assert "2026-11-08: 8" in text
     assert "2026-11-09" not in text
-    assert "2026-11-03" not in text
+    assert "2026-11-01" not in text
     assert "+1" in text
     assert "Пропущені дні" in text
 
