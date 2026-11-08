@@ -1187,9 +1187,9 @@ async def instagram_stats_command(message: types.Message):
         current = overview.get("followers_count")
         delta = f" ({current - first_count:+d} від першого вимірювання)" if isinstance(current, int) and isinstance(first_count, int) else ""
         await message.answer(
-            f"Instagram @{overview.get('username') or 'Настя'}\\n"
-            f"Підписники: {current if current is not None else 'немає доступу'}{delta}\\n"
-            f"Дописи: {overview.get('media_count') if overview.get('media_count') is not None else 'немає доступу'}\\n"
+            f"Instagram @{overview.get('username') or 'Настя'}\n"
+            f"Підписники: {current if current is not None else 'немає доступу'}{delta}\n"
+            f"Дописи: {overview.get('media_count') if overview.get('media_count') is not None else 'немає доступу'}\n"
             "Статистику оновлено; історія зберігається щоденно."
         )
     except Exception:
@@ -1202,9 +1202,9 @@ async def instagram_plan_command(message: types.Message):
         return
     rows = weekly_plan()
     await message.answer(
-        "Настя: 7-денний план для англомовної аудиторії:\\n"
-        + "\\n".join(f"{row['day']}. {row['topic']}: {row['idea']}" for row in rows)
-        + "\\nЦе ідеї, не опубліковані дописи."
+        "Настя: 7-денний план для англомовної аудиторії:\n"
+        + "\n".join(f"{row['day']}. {row['topic']}: {row['idea']}" for row in rows)
+        + "\nЦе ідеї, не опубліковані дописи."
     )
 
 
@@ -1279,7 +1279,7 @@ async def instagram_queue_command(message: types.Message):
         for key, entry in items[-12:]:
             lines.append(f"{key} | {entry.get('status')} | {entry.get('due_at')} | {str(entry.get('caption', ''))[:55]}")
         lines.append("Публікації: " + ("УВІМКНЕНО" if os.getenv("INSTAGRAM_POSTING_ENABLED", "false").lower() == "true" else "ВИМКНЕНО"))
-        await message.answer("\\n".join(lines))
+        await message.answer("\n".join(lines))
     except Exception:
         await message.answer("Черга зараз недоступна.")
 
@@ -1318,7 +1318,7 @@ async def instagram_dialogs_command(message: types.Message):
             lines.append(f"{sender_id}: {label}")
         lines.append("Перехопити: /ig_pause ID")
         lines.append("Повернути ШІ: /ig_resume ID")
-        await message.answer("\\n".join(lines))
+        await message.answer("\n".join(lines))
     except Exception:
         await message.answer("Не можу прочитати стан Instagram з Google Drive.")
 
