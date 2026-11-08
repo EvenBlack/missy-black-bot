@@ -46,7 +46,8 @@ async def check_login_path():
     version = os.getenv("META_GRAPH_VERSION", "v27.0")
     if not token:
         return {"status": "config_missing"}
-    if not version.startswith("v") or not version[1:].isdigit():
+    import re
+    if not re.fullmatch(r"v[0-9]+\\.[0-9]+", version):
         return {"status": "config_error"}
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=12)) as session:
