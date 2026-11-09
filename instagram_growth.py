@@ -195,6 +195,20 @@ async def queue_summary(read_memory):
     return sorted(_entries(data).items(), key=lambda row: row[1].get("due_at", ""))
 
 
+def _log_meta_rejection(stage, http_status, body):
+    """Log safe machine-readable Meta error codes, never tokens or URLs."""
+    error = body.get("error") if isinstance(body, dict) else None
+    error = error if isinstance(error, dict) else {}
+    code, subcode, kind = error.get("code"), error.get("error_subcode"), error.get("type")
+    log.error(
+        "INSTAGRAM_PUBLISH %s_error http=%s code=%s subcode=%s type=%s",
+        stage, int(http_status),
+        str(code)[:15] if isinstance(code, (str, int)) else "unknown",
+        str(subcode)[:15] if isinstance(subcode, (str, int)) else "unknown",
+        str(kind)[:50] if isinstance(kind, str) and kind.isidentifier() else "unknown",
+    )
+
+
 async def publish_image(image_url, caption, account_id=None):
     """Use the same Meta Facebook Graph domain already verified for Unified Login."""
     token = os.getenv("INSTAGRAM_ACCESS_TOKEN")
@@ -212,7 +226,7 @@ async def publish_image(image_url, caption, account_id=None):
         ) as response:
             container = await response.json(content_type=None)
             if response.status >= 400 or not isinstance(container, dict) or not container.get("id"):
-                log.error("INSTAGRAM_PUBLISH container_error http=%s", response.status)
+                _log_meta_rejection("container", response.status, container)
                 raise RuntimeError("Instagram media container rejected")
         container_id = str(container["id"])
         # Meta processes media asynchronously; publishing an unready container fails.
@@ -243,7 +257,7 @@ async def publish_image(image_url, caption, account_id=None):
         ) as response:
             published = await response.json(content_type=None)
             if response.status >= 400 or not isinstance(published, dict) or not published.get("id"):
-                log.error("INSTAGRAM_PUBLISH publish_error http=%s", response.status)
+                _log_meta_rejection("publish", response.status, published)
                 raise RuntimeError("Instagram publish rejected")
         return str(published["id"])
 
