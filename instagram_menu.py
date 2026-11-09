@@ -11,7 +11,7 @@ from aiogram import F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BufferedInputFile
 
-from instagram_growth import weekly_plan, queue_summary, fetch_account_overview, save_growth_snapshot, add_photo_draft, approve_draft, discard_draft, publish_one_now, mark_manual_publication, weekly_growth_report
+from instagram_growth import weekly_plan, queue_summary, fetch_account_overview, save_growth_snapshot, add_photo_draft, approve_draft, discard_draft, publish_one_now, mark_manual_publication, weekly_growth_report, check_archived_photo_delivery
 from instagram_handoff import list_dialogs, set_dialog_mode
 from instagram_permissions import check_instagram_permissions, render_permissions_report
 from instagram_login_diagnostic import check_login_path, render_login_path
@@ -499,6 +499,40 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
                                          reply_markup=menu_keyboard())
             except Exception:
                 await message.answer("Не вдалося змінити чернетку. Вона могла бути вже погоджена або скасована.")
+        elif action.startswith("checkphoto:"):
+            draft_id = action.partition(":")[2]
+            if not __import__("re").fullmatch(r"[a-f0-9]{8}", draft_id):
+                return
+            try:
+                entries = dict(await queue_summary(read_memory))
+                item = entries.get(draft_id)
+                if (not isinstance(item, dict)
+                        or item.get("status") not in ("approved", "publishing")
+                        or item.get("photo_owner_id") != str(query.from_user.id)
+                        or not item.get("photo_archive_id")
+                        or not item.get("image_url")):
+                    await message.answer("Це архівне фото недоступне для перевірки.")
+                    return
+                result = await check_archived_photo_delivery(item["image_url"])
+                if result["ok"]:
+                    await message.answer(
+                        "✅ Файл JPEG доступний через публічне HTTPS-посилання. "
+                        "Перевірка тільки читала фото; до Meta нічого не надсилалося. "
+                        "Доступність фото не підтверджує дозволи Meta."
+                    )
+                else:
+                    await message.answer(
+                        "⚠️ Публічне посилання на фото не пройшло перевірку. "
+                        "HTTP: " + str(result["http"] or "немає відповіді") +
+                        ", причина: " + str(result["reason"]) +
+                        ". Публікацію НЕ запускала. Передай цей результат мені."
+                    )
+            except Exception as exc:
+                log.warning("INSTAGRAM_PHOTO_PREFLIGHT_FAILED reason=%s", type(exc).__name__)
+                await message.answer(
+                    "⚠️ Не вдалося завершити перевірку фото. "
+                    "Нічого не опубліковано. Передай мені це повідомлення."
+                )
         elif action.startswith("publishask:"):
             draft_id = action.partition(":")[2]
             if not __import__("re").fullmatch(r"[a-f0-9]{8}", draft_id):
@@ -576,6 +610,11 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
                 for key, item in items[-10:]:
                     lines.append(f"{key}: {item.get('status', '?')} — {item.get('due_at', '?')}")
                     if item.get("photo_owner_id") == str(query.from_user.id):
+                        if item.get("status") in ("approved", "publishing") and item.get("photo_archive_id"):
+                            buttons.append([InlineKeyboardButton(
+                                text="🔍 Перевірити доступ до фото · " + key,
+                                callback_data="igmenu:checkphoto:" + key,
+                            )])
                         if item.get("status") == "approved":
                             buttons.append([InlineKeyboardButton(
                                 text="🚀 Опублікувати зараз · " + key,
