@@ -533,11 +533,11 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
                             ". Це лише завантаження JPEG, нічого не опубліковано.",
                 )
                 await message.answer(
-                    "📋 Готовий англійський підпис для копіювання:\\n\\n"
+                    "📋 Готовий англійський підпис для копіювання:\n\n"
                     + item["caption"] +
-                    "\\n\\nℹ️ Український переклад лише для тебе:\\n"
+                    "\n\nℹ️ Український переклад лише для тебе:\n"
                     + (translate_editorial_caption(item["caption"]) or "Переклад не збережений.") +
-                    "\\n\\nInstagram у браузері: https://www.instagram.com/ "
+                    "\n\nInstagram у браузері: https://www.instagram.com/ "
                     "→ Створити допис → вибрати JPEG → вставити англійський текст. "
                     "Чернетка Міссі не змінена.",
                 )
