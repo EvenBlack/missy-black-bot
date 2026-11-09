@@ -28,3 +28,19 @@ def test_english_caption_separate_and_owner_only_preview():
 def test_invalid_day_rejected(day):
     with pytest.raises(ValueError):
         calendar_day(date(2026,11,9), day)
+
+
+def test_telegram_growth_menu_callback_does_not_shadow_timedelta():
+    """Regression: the 14-day button previously crashed with a NameError."""
+    import ast
+    from pathlib import Path
+    tree = ast.parse(Path("instagram_menu.py").read_text(encoding="utf-8"))
+    callbacks = [n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef)
+                 and n.name == "handle_menu"]
+    assert len(callbacks) == 1
+    callback = callbacks[0]
+    local_imports = [alias.name for n in ast.walk(callback)
+                     if isinstance(n, ast.ImportFrom) and n.module == "datetime"
+                     for alias in n.names]
+    assert "timedelta" not in local_imports
+    assert any(isinstance(n, ast.Name) and n.id == "timedelta" for n in ast.walk(callback))
