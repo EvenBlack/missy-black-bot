@@ -237,7 +237,7 @@ async def check_archived_photo_delivery(image_url):
                 content = await response.content.read(8 * 1024 * 1024 + 1)
                 if (len(content) > 8 * 1024 * 1024
                         or len(content) < 4
-                        or content[:3] != b"\\xff\\xd8\\xff"):
+                        or content[:3] != b"\xff\xd8\xff"):
                     log.warning("INSTAGRAM_PHOTO_PREFLIGHT invalid_jpeg")
                     return {"ok": False, "http": http_status, "reason": "jpeg"}
                 log.info("INSTAGRAM_PHOTO_PREFLIGHT ok size=%s", len(content))
