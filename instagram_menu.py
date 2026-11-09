@@ -11,7 +11,7 @@ from aiogram import F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BufferedInputFile
 
-from instagram_growth import weekly_plan, queue_summary, fetch_account_overview, save_growth_snapshot, add_photo_draft, approve_draft, discard_draft, publish_one_now, mark_manual_publication, weekly_growth_report, check_archived_photo_delivery
+from instagram_growth import weekly_plan, queue_summary, fetch_account_overview, save_growth_snapshot, add_photo_draft, approve_draft, discard_draft, publish_one_now, mark_manual_publication, reopen_failed_photo_draft, weekly_growth_report, check_archived_photo_delivery
 from instagram_handoff import list_dialogs, set_dialog_mode
 from instagram_permissions import check_instagram_permissions, render_permissions_report
 from instagram_login_diagnostic import check_login_path, render_login_path
@@ -499,6 +499,51 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
                                          reply_markup=menu_keyboard())
             except Exception:
                 await message.answer("Не вдалося змінити чернетку. Вона могла бути вже погоджена або скасована.")
+        elif action.startswith("reopenask:"):
+            draft_id = action.partition(":")[2]
+            if not __import__("re").fullmatch(r"[a-f0-9]{8}", draft_id):
+                return
+            entries = dict(await queue_summary(read_memory))
+            item = entries.get(draft_id)
+            if (not isinstance(item, dict)
+                    or item.get("status") != "publishing"
+                    or item.get("photo_owner_id") != str(query.from_user.id)
+                    or not item.get("photo_archive_id")):
+                await message.answer("Цю чернетку не можна відновити.")
+                return
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="✅ Підтверджую: фото немає в Instagram",
+                    callback_data="igmenu:reopenconfirm:" + draft_id,
+                )],
+                [InlineKeyboardButton(text="⬅️ Ні, назад", callback_data="igmenu:queue")],
+            ])
+            await message.answer(
+                "⚠️ Ти особисто перевірив Instagram Насті і впевнений, "
+                "що фото з цієї чернетки НЕ опубліковане? "
+                "Підтвердження лише поверне чернетку в стан погодженої; "
+                "жодного допису не створить.",
+                reply_markup=kb,
+            )
+        elif action.startswith("reopenconfirm:"):
+            draft_id = action.partition(":")[2]
+            if not __import__("re").fullmatch(r"[a-f0-9]{8}", draft_id):
+                return
+            try:
+                await reopen_failed_photo_draft(
+                    change_memory, read_memory, draft_id, query.from_user.id
+                )
+                await message.answer(
+                    "✅ Чернетку відновлено для окремого підтвердження. "
+                    "Нічого не опубліковано. Спершу натисни «🔍 Перевірити доступ до фото» "
+                    "у черзі; потім можна знову відкрити фінальне підтвердження.",
+                    reply_markup=menu_keyboard(),
+                )
+            except ValueError:
+                await message.answer("Чернетка недоступна або її статус змінився.")
+            except Exception as exc:
+                log.warning("INSTAGRAM_DRAFT_REOPEN_FAILED reason=%s", type(exc).__name__)
+                await message.answer("Не вдалося відновити чернетку.")
         elif action.startswith("checkphoto:"):
             draft_id = action.partition(":")[2]
             if not __import__("re").fullmatch(r"[a-f0-9]{8}", draft_id):
@@ -614,6 +659,11 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
                             buttons.append([InlineKeyboardButton(
                                 text="🔍 Перевірити доступ до фото · " + key,
                                 callback_data="igmenu:checkphoto:" + key,
+                            )])
+                        if item.get("status") == "publishing" and item.get("photo_archive_id"):
+                            buttons.append([InlineKeyboardButton(
+                                text="♻️ Відновити після невдалої спроби · " + key,
+                                callback_data="igmenu:reopenask:" + key,
                             )])
                         if item.get("status") == "approved":
                             buttons.append([InlineKeyboardButton(
