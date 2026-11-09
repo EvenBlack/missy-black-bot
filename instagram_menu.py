@@ -387,7 +387,6 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
             from datetime import date
             try:
                 day = date.fromisoformat(action.partition(":")[2])
-                from datetime import timedelta
                 if not datetime.now(KYIV).date() <= day <= datetime.now(KYIV).date() + timedelta(days=7):
                     raise ValueError("Date outside current editorial week")
                 idea = editorial_idea(day)
