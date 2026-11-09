@@ -2404,7 +2404,9 @@ async def start_web():
     install_instagram_webhook(app, create_instagram_message_handler(groq_client, GROQ_MODEL, completion_options, read_memory, change_memory))
     install_instagram_media(app, read_memory, drive_store)
 
-    runner = web.AppRunner(app)
+    # Signed media links contain short-lived authorization signatures in query parameters.
+    # Disable HTTP access lines that would otherwise print those secrets in Render logs.
+    runner = web.AppRunner(app, access_log=None)
     await runner.setup()
 
     port = int(os.getenv("PORT", "10000"))
