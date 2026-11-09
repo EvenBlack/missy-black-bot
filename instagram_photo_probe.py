@@ -2,6 +2,7 @@
 
 Never calls Meta, changes draft status, or logs signed media URLs.
 """
+import asyncio
 import logging
 import os
 import re
@@ -26,6 +27,11 @@ async def check_failed_photo_once(read_memory, check_func=check_archived_photo_d
             log.warning("INSTAGRAM_FAILED_PHOTO_CHECK not_eligible")
             return {"status": "not_eligible"}
         result = await check_func(item["image_url"])
+        if (not result.get("ok") and result.get("http") in (502, 503, 504)):
+            # During Render's handover an otherwise valid URL can briefly be 502.
+            # Re-check only the JPEG after the new server is fully live.
+            await asyncio.sleep(20)
+            result = await check_func(item["image_url"])
         log.warning(
             "INSTAGRAM_FAILED_PHOTO_CHECK ok=%s http=%s reason=%s",
             bool(result.get("ok")),
