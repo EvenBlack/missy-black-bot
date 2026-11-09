@@ -457,14 +457,9 @@ async def publish_one_now(read_memory, change_memory, draft_id, owner_id, publis
             "Нічого не надіслано в Instagram, погодження збережене. "
             "Відкрий перевірку фото в черзі та передай результат."
         )
-    meta_access = await meta_preflight_func(str(account))
-    if not meta_access.get("ok"):
-        raise RuntimeError(
-            "Meta не дозволяє доступ до Instagram-акаунта ("
-            + str(meta_access.get("reason", "невідомо"))[:30] +
-            "). Публікацію НЕ запускала, погодження збережене. "
-            "Потрібно відновити права активного токена Meta."
-        )
+    # Reading an Instagram profile and publishing media can require distinct
+    # grants. A read-only probe is NOT proof that media publishing is denied.
+    # Do not turn that diagnostic into a mandatory publishing gate.
     claimed = False
     def claim(data):
         nonlocal claimed
