@@ -9,10 +9,11 @@ def test_archive_photo_offers_all_seven_topics():
     photo_id = "a" * 24
     kb = caption_options_keyboard(photo_id)
     buttons = [button for row in kb.inline_keyboard for button in row]
-    assert len(buttons) == len(IDEAS) + 1
+    assert len(buttons) == len(IDEAS) + 2
     for idx, item in enumerate(IDEAS):
         assert buttons[idx].callback_data == f"igmenu:concept:{photo_id}:{idx}"
         assert item["topic"] in buttons[idx].text
+    assert buttons[-2].callback_data == "igmenu:night:" + photo_id
     assert buttons[-1].callback_data == "igmenu:archive"
     assert all(len(button.callback_data) <= 64 for button in buttons)
 
