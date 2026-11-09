@@ -64,15 +64,17 @@ async def test_explicit_owner_publish_only_once(monkeypatch):
         return "17888"
     async def good_preflight(_url):
         return {"ok": True, "http": 200}
+    async def good_meta_preflight(_account):
+        return {"ok": True}
     with pytest.raises(ValueError):
-        await publish_one_now(read, change, key, 999, fake_publish, good_preflight)
+        await publish_one_now(read, change, key, 999, fake_publish, good_preflight, good_meta_preflight)
     assert state["instagram_publish_queue"][key]["status"] == "approved"
-    result = await publish_one_now(read, change, key, 1234, fake_publish, good_preflight)
+    result = await publish_one_now(read, change, key, 1234, fake_publish, good_preflight, good_meta_preflight)
     assert result == "17888"
     assert state["instagram_publish_queue"][key]["status"] == "published"
     assert len(calls) == 1
     with pytest.raises(ValueError):
-        await publish_one_now(read, change, key, 1234, fake_publish, good_preflight)
+        await publish_one_now(read, change, key, 1234, fake_publish, good_preflight, good_meta_preflight)
     assert len(calls) == 1
 
 
@@ -94,11 +96,13 @@ async def test_explicit_publish_failed_meta_does_not_retry(monkeypatch):
         raise RuntimeError("simulated Meta failure")
     async def good_preflight(_url):
         return {"ok": True, "http": 200}
+    async def good_meta_preflight(_account):
+        return {"ok": True}
     with pytest.raises(RuntimeError, match="повторення заблоковано"):
-        await publish_one_now(read, change, key, 1234, fail_publish, good_preflight)
+        await publish_one_now(read, change, key, 1234, fail_publish, good_preflight, good_meta_preflight)
     assert state["instagram_publish_queue"][key]["status"] == "publishing"
     with pytest.raises(ValueError):
-        await publish_one_now(read, change, key, 1234, fail_publish, good_preflight)
+        await publish_one_now(read, change, key, 1234, fail_publish, good_preflight, good_meta_preflight)
     assert len(calls) == 1
 
 
@@ -195,3 +199,26 @@ async def test_owner_can_reopen_only_failed_photo_after_confirming_absence(monke
     assert "owner_confirmed_absent_at" in state["instagram_publish_queue"][key]
     with pytest.raises(ValueError):
         await reopen_failed_photo_draft(change, read, key, 1234)
+
+
+@pytest.mark.asyncio
+async def test_denied_meta_profile_never_calls_publisher_or_locks_draft(monkeypatch):
+    from instagram_growth import publish_one_now
+    monkeypatch.setenv("META_TOKEN_ENCRYPTION_KEY", "1"*64)
+    monkeypatch.setenv("INSTAGRAM_ACCOUNT_ID", "178999888777")
+    state = {}
+    async def read():
+        return copy.deepcopy(state)
+    async def change(fn):
+        fn(state)
+    key = await add_photo_draft(change, "a"*24, 1234, "Red Fox night")
+    await approve_draft(change, read, key)
+    async def ok_jpeg(_url):
+        return {"ok": True, "http": 200}
+    async def denied_meta(_account):
+        return {"ok": False, "reason": "meta_denied", "code": "200"}
+    async def forbidden_publish(*_args):
+        raise AssertionError("no Meta publishing request allowed")
+    with pytest.raises(RuntimeError, match="погодження збережене"):
+        await publish_one_now(read, change, key, 1234, forbidden_publish, ok_jpeg, denied_meta)
+    assert state["instagram_publish_queue"][key]["status"] == "approved"
