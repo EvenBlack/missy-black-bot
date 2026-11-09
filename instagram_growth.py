@@ -209,6 +209,44 @@ def _log_meta_rejection(stage, http_status, body):
     )
 
 
+async def check_archived_photo_delivery(image_url):
+    """Read-only public JPEG preflight. Never calls Meta or changes draft status.
+
+    Read the exact URL Meta will receive through the public HTTPS service,
+    without authentication. Never log signed URLs or image bytes.
+    """
+    from urllib.parse import urlsplit
+    base = os.getenv("INSTAGRAM_PUBLIC_BASE_URL", "https://missy-black-bot.onrender.com")
+    expected = urlsplit(base)
+    candidate = urlsplit(validate_media_url(image_url))
+    if (candidate.scheme != "https" or candidate.netloc != expected.netloc
+            or not candidate.path.startswith("/ig/media/")):
+        raise ValueError("Only the signed archived photo endpoint can be tested")
+    timeout = aiohttp.ClientTimeout(total=40)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
+            async with session.get(image_url, allow_redirects=False) as response:
+                http_status = response.status
+                mime = response.headers.get("Content-Type", "").split(";")[0].strip().lower()
+                if http_status != 200:
+                    log.warning("INSTAGRAM_PHOTO_PREFLIGHT http=%s", http_status)
+                    return {"ok": False, "http": http_status, "reason": "http"}
+                if mime != "image/jpeg":
+                    log.warning("INSTAGRAM_PHOTO_PREFLIGHT invalid_content_type")
+                    return {"ok": False, "http": http_status, "reason": "content_type"}
+                content = await response.content.read(8 * 1024 * 1024 + 1)
+                if (len(content) > 8 * 1024 * 1024
+                        or len(content) < 4
+                        or content[:3] != b"\\xff\\xd8\\xff"):
+                    log.warning("INSTAGRAM_PHOTO_PREFLIGHT invalid_jpeg")
+                    return {"ok": False, "http": http_status, "reason": "jpeg"}
+                log.info("INSTAGRAM_PHOTO_PREFLIGHT ok size=%s", len(content))
+                return {"ok": True, "http": 200, "bytes": len(content)}
+    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        log.warning("INSTAGRAM_PHOTO_PREFLIGHT network_failure reason=%s", type(exc).__name__)
+        return {"ok": False, "http": None, "reason": "network"}
+
+
 async def publish_image(image_url, caption, account_id=None):
     """Use the same Meta Facebook Graph domain already verified for Unified Login."""
     token = os.getenv("INSTAGRAM_ACCESS_TOKEN")
