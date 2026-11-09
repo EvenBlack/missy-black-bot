@@ -266,7 +266,13 @@ async def check_archived_photo_delivery(image_url):
                 if mime != "image/jpeg":
                     log.warning("INSTAGRAM_PHOTO_PREFLIGHT invalid_content_type")
                     return {"ok": False, "http": http_status, "reason": "content_type"}
-                content = await response.content.read(8 * 1024 * 1024 + 1)
+                # aiohttp.read(n) may return only the first network chunk.
+                # This endpoint itself caps JPEGs at 8 MiB; consume the full file.
+                declared_size = response.headers.get("Content-Length", "")
+                if declared_size.isdigit() and int(declared_size) > 8 * 1024 * 1024:
+                    log.warning("INSTAGRAM_PHOTO_PREFLIGHT oversized_image")
+                    return {"ok": False, "http": http_status, "reason": "jpeg"}
+                content = await response.content.read()
                 if (len(content) > 8 * 1024 * 1024
                         or len(content) < 4
                         or content[:3] != b"\xff\xd8\xff"):
