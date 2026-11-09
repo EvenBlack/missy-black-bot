@@ -5,6 +5,24 @@ to Instagram remains the original English text from instagram_editorial.IDEAS.
 """
 from instagram_editorial import IDEAS
 
+# Owner-approved one-off caption for the Red Fox mug photo.
+# Only the English text enters Instagram; Ukrainian is preview-only.
+RED_FOX_NIGHT_CAPTION = (
+    "Why is it that late at night, my mind suddenly fills with secrets and cheeky little ideas? 🌙😏\n\n"
+    "Anyone else have a mischievous side that wakes up at night? 🦊😉\n\n"
+    "#LateNightThoughts #MischievousMood #RedFoxVibes #CozyNight "
+    "#CurlyRedhead #PlayfulMood #NastyaTsarapka"
+)
+
+RED_FOX_NIGHT_TRANSLATION = (
+    "Чому пізно ввечері моя голова раптом наповнюється секретами та "
+    "маленькими пустотливими ідеями? 🌙😏\n\n"
+    "У когось ще прокидається хитра, пустотлива сторона характеру вночі? 🦊😉\n\n"
+    "Хештеги: нічні думки, пустотливий настрій, атмосфера рудої лисички, "
+    "затишний вечір, рудоволоса кучерява дівчина, грайливий настрій, Настя Царапка."
+)
+
+
 TRANSLATIONS_UK = (
     (
         "Іноді план на день — «бути продуктивною», а реальність — "
@@ -49,6 +67,8 @@ TRANSLATIONS_UK = (
 
 def translate_editorial_caption(caption):
     """Return known Ukrainian translation, or None rather than inventing one."""
+    if caption == RED_FOX_NIGHT_CAPTION:
+        return RED_FOX_NIGHT_TRANSLATION
     for idea, translation in zip(IDEAS, TRANSLATIONS_UK):
         if caption == idea["caption"]:
             return translation
