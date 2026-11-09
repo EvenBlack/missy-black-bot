@@ -56,7 +56,7 @@ def calendar_day(start, day_number):
     items = []
     for item in (a, b):
         title, visual, hook_uk, question = item
-        items.append({"title": title, "visual": visual, "caption_en": hook_uk + ". " + question + "\n\n" + TAGS})
+        items.append({"title": title, "visual": visual, "idea_uk": hook_uk, "caption_en": question + " 🧡\n\n" + TAGS})
     # Four evenly distributed Reels per seven-day block independent of calendar weekday.
     offset = (day_number - 1) % 7
     reel = REELS[(day_number - 1)//7*4 + (0, 2, 4, 6).index(offset)] if offset in REEL_WEEKDAYS else None
@@ -77,7 +77,7 @@ def render_day(day):
              "🖼 Дві фотографії (чернетки, не опубліковано):"]
     for i, photo in enumerate(day["photos"], 1):
         lines += [f"Фото {i}. {photo['title']}", "Кадр: " + photo["visual"],
-                  "Ідея українською: " + photo["caption_en"].split(". ", 1)[0]]
+                  "Ідея українською: " + photo["idea_uk"], "Підпис англійською: " + photo["caption_en"]]
     if day["reel"]:
         title, actions, hook = day["reel"]
         lines += ["🎬 Reels: " + title, "Сценарій: " + actions, "Англійський хук: " + hook]
