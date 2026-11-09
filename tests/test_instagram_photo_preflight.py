@@ -10,7 +10,7 @@ class FakeResponse:
         self.headers = {"Content-Type": mime}
         self.content = self
         self.data = data if data is not None else bytes([255, 216, 255, 224]) + b"hello"
-    async def read(self, _limit):
+    async def read(self):
         return self.data
     async def __aenter__(self):
         return self
