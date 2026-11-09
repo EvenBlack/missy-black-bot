@@ -160,6 +160,38 @@ async def approve_draft(change_memory, read_memory, draft_id):
     await change_memory(update)
 
 
+async def reopen_failed_photo_draft(change_memory, read_memory, draft_id, owner_id):
+    """Owner explicitly attests the photo is absent on Instagram after a failed attempt.
+
+    This only reopens the same archived draft. It never sends a Meta request.
+    Publication still requires the normal separate final confirmation.
+    """
+    import re
+    if not re.fullmatch(r"[a-f0-9]{8}", str(draft_id)) or not str(owner_id).isdigit():
+        raise ValueError("Invalid draft or owner")
+    snapshot = _entries(await read_memory()).get(draft_id)
+    if (not isinstance(snapshot, dict)
+            or snapshot.get("status") != "publishing"
+            or snapshot.get("photo_owner_id") != str(owner_id)
+            or not snapshot.get("photo_archive_id")):
+        raise ValueError("Only your failed archived photo draft can be reopened")
+    changed = False
+    def update(data):
+        nonlocal changed
+        item = data.get("instagram_publish_queue", {}).get(draft_id)
+        if (isinstance(item, dict)
+                and item.get("status") == "publishing"
+                and item.get("photo_owner_id") == str(owner_id)
+                and item.get("photo_archive_id") == snapshot["photo_archive_id"]):
+            item["status"] = "approved"
+            item["owner_confirmed_absent_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            changed = True
+    await change_memory(update)
+    if not changed:
+        raise ValueError("Draft changed before reopen")
+    return True
+
+
 async def mark_manual_publication(change_memory, read_memory, draft_id, owner_id):
     """Owner explicitly confirms that this archived photo was posted via Meta UI.
 
