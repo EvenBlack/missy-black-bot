@@ -20,6 +20,7 @@ from instagram_handoff import list_dialogs, set_dialog_mode
 from instagram_menu import install_instagram_menu, daily_report_loop
 from instagram_media import install_instagram_media
 from instagram_first_post import one_shot_first_post
+from instagram_photo_probe import check_failed_photo_once
 from instagram_growth import weekly_plan, add_draft, approve_draft, queue_summary, publisher_loop, fetch_account_overview, save_growth_snapshot
 from PIL import Image, UnidentifiedImageError
 from aiogram import Bot, Dispatcher, F, types
@@ -2422,6 +2423,7 @@ async def main():
     publisher_task = None
     instagram_report_task = None
     first_post_task = None
+    photo_probe_task = None
 
     try:
         await initialize_memory()
@@ -2435,6 +2437,7 @@ async def main():
             publisher_task = asyncio.create_task(publisher_loop(read_memory, change_memory))
             instagram_report_task = asyncio.create_task(daily_report_loop(bot, read_memory, change_memory))
             first_post_task = asyncio.create_task(one_shot_first_post(bot, read_memory, change_memory))
+            photo_probe_task = asyncio.create_task(check_failed_photo_once(read_memory))
         event("BOT", "MISSY STARTED")
         automation_features.engine.start()
         event('AUTOMATION_BACKEND','configured; awaiting successful state read' if getattr(drive_store,'automation_ready',False) else 'waiting for Apps Script update; existing bot features remain active')
@@ -2445,6 +2448,12 @@ async def main():
         )
 
     finally:
+        if photo_probe_task is not None:
+            photo_probe_task.cancel()
+            try:
+                await photo_probe_task
+            except asyncio.CancelledError:
+                pass
         if first_post_task is not None:
             first_post_task.cancel()
             try:
