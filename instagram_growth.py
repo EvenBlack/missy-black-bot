@@ -385,7 +385,45 @@ async def publish_due_once(read_memory, change_memory, publish_func=publish_imag
     return completed
 
 
-async def publish_one_now(read_memory, change_memory, draft_id, owner_id, publish_func=publish_image, preflight_func=check_archived_photo_delivery):
+async def verify_meta_account_before_publish(account_id):
+    """Read-only authorization check with the SAME account, token and host as publish.
+
+    A denied profile read means the token cannot satisfy this integration's
+    required Instagram basic permission. Never logs credentials or raw errors.
+    """
+    if not str(account_id or "").isdigit():
+        return {"ok": False, "reason": "account"}
+    token = os.getenv("INSTAGRAM_ACCESS_TOKEN")
+    if not token:
+        return {"ok": False, "reason": "token_missing"}
+    version = os.getenv("META_GRAPH_VERSION", "v27.0")
+    if not __import__("re").fullmatch(r"v[0-9]+[.][0-9]+", version):
+        return {"ok": False, "reason": "version"}
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+            async with session.get(
+                f"https://graph.facebook.com/{version}/{account_id}",
+                params={"fields": "id"},
+                headers={"Authorization": "Bearer " + token},
+            ) as response:
+                body = await response.json(content_type=None)
+                status = response.status
+        error = body.get("error") if isinstance(body, dict) else None
+        code = error.get("code") if isinstance(error, dict) else None
+        if status >= 400 or not isinstance(body, dict) or error:
+            label = str(code)[:12] if isinstance(code, (str, int)) else "unknown"
+            log.warning("INSTAGRAM_META_PREFLIGHT access_denied http=%s code=%s", status, label)
+            return {"ok": False, "reason": "meta_denied", "http": status, "code": label}
+        if str(body.get("id", "")) != str(account_id):
+            log.warning("INSTAGRAM_META_PREFLIGHT account_mismatch")
+            return {"ok": False, "reason": "account_mismatch"}
+        return {"ok": True}
+    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, TypeError) as exc:
+        log.warning("INSTAGRAM_META_PREFLIGHT network_failed reason=%s", type(exc).__name__)
+        return {"ok": False, "reason": "network"}
+
+
+async def publish_one_now(read_memory, change_memory, draft_id, owner_id, publish_func=publish_image, preflight_func=check_archived_photo_delivery, meta_preflight_func=verify_meta_account_before_publish):
     """Publish exactly one owner-approved draft after a dedicated confirm button.
 
     The global automatic scheduler flag is intentionally NOT checked: it remains off.
@@ -418,6 +456,14 @@ async def publish_one_now(read_memory, change_memory, draft_id, owner_id, publis
             "Фото зараз недоступне для серверів Meta (перевірка HTTPS/JPEG не пройдена). "
             "Нічого не надіслано в Instagram, погодження збережене. "
             "Відкрий перевірку фото в черзі та передай результат."
+        )
+    meta_access = await meta_preflight_func(str(account))
+    if not meta_access.get("ok"):
+        raise RuntimeError(
+            "Meta не дозволяє доступ до Instagram-акаунта ("
+            + str(meta_access.get("reason", "невідомо"))[:30] +
+            "). Публікацію НЕ запускала, погодження збережене. "
+            "Потрібно відновити права активного токена Meta."
         )
     claimed = False
     def claim(data):
