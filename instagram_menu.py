@@ -18,7 +18,7 @@ from instagram_login_diagnostic import check_login_path, render_login_path
 from instagram_account_diagnostic import check_account_read_path, render_account_read_path
 from instagram_token_source_audit import audit_instagram_token_sources, render_token_source_audit
 from instagram_editorial import IDEAS, editorial_idea, editorial_week, render_editorial_idea
-from instagram_caption_translation import bilingual_editorial_caption, translate_editorial_caption
+from instagram_caption_translation import bilingual_editorial_caption, translate_editorial_caption, RED_FOX_NIGHT_CAPTION
 
 log = logging.getLogger("instagram_menu")
 KYIV = ZoneInfo("Europe/Kyiv")
@@ -50,6 +50,10 @@ def caption_options_keyboard(archive_id):
         )]
         for i, idea in enumerate(IDEAS)
     ]
+    rows.append([InlineKeyboardButton(
+        text="🌙 Наш підпис — Red Fox",
+        callback_data="igmenu:night:" + archive_id,
+    )])
     rows.append([InlineKeyboardButton(text="⬅️ До архіву", callback_data="igmenu:archive")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -222,8 +226,8 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
             reply_markup=caption_options_keyboard(archive_id),
         )
 
-    async def send_photo_draft(message, archive_id, owner_id, caption_index):
-        """Create draft only after owner selected one of the visible topics."""
+    async def send_photo_draft(message, archive_id, owner_id, caption_index=None, red_fox_night=False):
+        """Create draft only after owner selected a topic or the exact agreed caption."""
         if list_owner_photos is None:
             raise ValueError("Photo archive unavailable")
         photos = await list_owner_photos(owner_id)
@@ -232,8 +236,14 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
             for photo in photos
         ):
             raise ValueError("Owner photo unavailable")
-        idea = caption_for_topic(caption_index)
-        caption = idea["caption"]
+        if red_fox_night:
+            if caption_index is not None:
+                raise ValueError("Conflicting caption choices")
+            caption = RED_FOX_NIGHT_CAPTION
+            idea = {"topic": "Red Fox — нічні думки", "shot": "Фото Насті з чашкою Red Fox"}
+        else:
+            idea = caption_for_topic(caption_index)
+            caption = idea["caption"]
         draft_id = await add_photo_draft(change_memory, archive_id, owner_id, caption)
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ Погодити чернетку", callback_data="igmenu:approvephoto:" + draft_id)],
@@ -441,6 +451,19 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
                 await show_caption_options(message, photo_id, query.from_user.id)
             except Exception:
                 await message.answer("Не вдалося підготувати чернетку з архіву.")
+        elif action.startswith("night:"):
+            photo_id = action.partition(":")[2]
+            if not __import__("re").fullmatch(r"[a-f0-9]{24}", photo_id):
+                return
+            try:
+                await send_photo_draft(
+                    message, photo_id, query.from_user.id, red_fox_night=True
+                )
+            except ValueError:
+                await message.answer("Не вдалося створити чернетку: фото недоступне.")
+            except Exception as exc:
+                log.warning("INSTAGRAM_NIGHT_DRAFT_FAILED reason=%s", type(exc).__name__)
+                await message.answer("Не вдалося зберегти чернетку. Спробуй ще раз.")
         elif action.startswith("concept:"):
             parts = action.split(":")
             if (len(parts) != 3
