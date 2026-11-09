@@ -18,6 +18,7 @@ from instagram_login_diagnostic import check_login_path, render_login_path
 from instagram_account_diagnostic import check_account_read_path, render_account_read_path
 from instagram_token_source_audit import audit_instagram_token_sources, render_token_source_audit
 from instagram_editorial import IDEAS, editorial_idea, editorial_week, render_editorial_idea
+from instagram_14day_plan import current_start, calendar_day, render_day, render_summary
 from instagram_caption_translation import bilingual_editorial_caption, translate_editorial_caption, RED_FOX_NIGHT_CAPTION
 
 log = logging.getLogger("instagram_menu")
@@ -29,6 +30,7 @@ def menu_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [b("📊 Підписники", "stats"), b("📈 Приріст за 7 днів", "trends")],
         [b("📅 План на тиждень", "plan")],
+        [b("🚀 План просування на 14 днів", "growth14")],
         [b("📝 Ідея на сьогодні", "idea"), b("📚 Ідеї на 7 днів", "ideasweek")],
         [b("✍️ Підпис до фото", "caption"), b("🖼 Підготувати допис", "photo")],
         [b("📋 Черга дописів", "queue"), b("💬 Instagram Direct", "dialogs")],
@@ -335,6 +337,40 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
         elif action == "idea":
             idea = editorial_idea()
             await message.answer(render_editorial_idea(idea) + "\n\n🇺🇦 Український переклад:\n" + (translate_editorial_caption(idea["caption"]) or "Немає перекладу"), reply_markup=menu_keyboard())
+        elif action == "growth14":
+            start = current_start()
+            buttons = [
+                [InlineKeyboardButton(
+                    text=f"День {i} · {(start + timedelta(days=i-1)).isoformat()}",
+                    callback_data=f"igmenu:growthday:{start.isoformat()}:{i}",
+                )]
+                for i in range(1, 15)
+            ]
+            buttons.append([InlineKeyboardButton(text="⬅️ Меню", callback_data="igmenu:home")])
+            await message.answer(
+                render_summary(start),
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+            )
+        elif action.startswith("growthday:"):
+            from datetime import date
+            try:
+                parts = action.split(":")
+                if len(parts) != 3:
+                    raise ValueError("Invalid day selection")
+                start = date.fromisoformat(parts[1])
+                day = int(parts[2])
+                if not current_start() - timedelta(days=14) <= start <= current_start() + timedelta(days=1):
+                    raise ValueError("Calendar expired")
+                plan = calendar_day(start, day)
+                await message.answer(
+                    render_day(plan),
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="⬅️ Усі 14 днів", callback_data="igmenu:growth14")],
+                        [InlineKeyboardButton(text="🏠 Меню", callback_data="igmenu:home")],
+                    ]),
+                )
+            except (ValueError, TypeError):
+                await message.answer("Дата недоступна. Відкрий план на 14 днів заново.")
         elif action == "ideasweek":
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
