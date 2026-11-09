@@ -1,6 +1,7 @@
 """Ukrainian owner previews must never alter English publishing captions."""
 from instagram_caption_translation import (
     TRANSLATIONS_UK, translate_editorial_caption, bilingual_editorial_caption,
+    RED_FOX_NIGHT_CAPTION, RED_FOX_NIGHT_TRANSLATION,
 )
 from instagram_editorial import IDEAS
 
@@ -22,3 +23,12 @@ def test_unknown_caption_never_receives_incorrect_translation():
     result = bilingual_editorial_caption("Other caption")
     assert "Other caption" in result
     assert "не підготовлено" in result
+
+def test_approved_red_fox_caption_has_exact_owner_translation():
+    assert "late at night" in RED_FOX_NIGHT_CAPTION
+    assert "#NastyaTsarapka" in RED_FOX_NIGHT_CAPTION
+    assert "Український" not in RED_FOX_NIGHT_CAPTION
+    assert translate_editorial_caption(RED_FOX_NIGHT_CAPTION) == RED_FOX_NIGHT_TRANSLATION
+    preview = bilingual_editorial_caption(RED_FOX_NIGHT_CAPTION)
+    assert RED_FOX_NIGHT_CAPTION in preview
+    assert RED_FOX_NIGHT_TRANSLATION in preview
