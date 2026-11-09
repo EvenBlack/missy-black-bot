@@ -347,7 +347,7 @@ async def publish_due_once(read_memory, change_memory, publish_func=publish_imag
     return completed
 
 
-async def publish_one_now(read_memory, change_memory, draft_id, owner_id, publish_func=publish_image):
+async def publish_one_now(read_memory, change_memory, draft_id, owner_id, publish_func=publish_image, preflight_func=check_archived_photo_delivery):
     """Publish exactly one owner-approved draft after a dedicated confirm button.
 
     The global automatic scheduler flag is intentionally NOT checked: it remains off.
@@ -367,6 +367,20 @@ async def publish_one_now(read_memory, change_memory, draft_id, owner_id, publis
     account = snapshot.get("instagram_account_id") or os.getenv("INSTAGRAM_ACCOUNT_ID")
     if not str(account or "").isdigit():
         raise RuntimeError("Instagram account ID unavailable")
+    # Preflight BEFORE marking the approved draft as publishing.
+    # A 502/503, missing JPEG, or network problem must never burn approval
+    # or send anything to Meta. The owner can try again after it is fixed.
+    delivery = await preflight_func(item["image_url"])
+    if not delivery.get("ok"):
+        log.warning(
+            "INSTAGRAM_OWNER_PREFLIGHT_BLOCKED http=%s reason=%s",
+            delivery.get("http"), str(delivery.get("reason", "unknown"))[:24],
+        )
+        raise RuntimeError(
+            "Фото зараз недоступне для серверів Meta (перевірка HTTPS/JPEG не пройдена). "
+            "Нічого не надіслано в Instagram, погодження збережене. "
+            "Відкрий перевірку фото в черзі та передай результат."
+        )
     claimed = False
     def claim(data):
         nonlocal claimed
