@@ -499,6 +499,52 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
                                          reply_markup=menu_keyboard())
             except Exception:
                 await message.answer("Не вдалося змінити чернетку. Вона могла бути вже погоджена або скасована.")
+        elif action.startswith("exportdraft:"):
+            draft_id = action.partition(":")[2]
+            if not __import__("re").fullmatch(r"[a-f0-9]{8}", draft_id):
+                return
+            if get_owner_photo is None:
+                await message.answer("Архів фотографій зараз недоступний.")
+                return
+            try:
+                entries = dict(await queue_summary(read_memory))
+                item = entries.get(draft_id)
+                if (not isinstance(item, dict)
+                        or item.get("status") not in ("draft", "approved", "publishing")
+                        or item.get("photo_owner_id") != str(query.from_user.id)
+                        or not __import__("re").fullmatch(
+                            r"[a-f0-9]{24}", str(item.get("photo_archive_id", "")))
+                        or not isinstance(item.get("caption"), str)
+                        or not item["caption"].strip()):
+                    await message.answer("Ця чернетка недоступна для завантаження.")
+                    return
+                photo_bytes, _filename, _old_caption = await get_owner_photo(
+                    query.from_user.id, item["photo_archive_id"]
+                )
+                if not isinstance(photo_bytes, bytes) or not photo_bytes or len(photo_bytes) > 8 * 1024 * 1024:
+                    raise ValueError("Invalid archived image")
+                # Convert from the original archive to Instagram-compatible JPEG.
+                # No third-party upload and no persistent state change.
+                from instagram_media import _to_jpeg
+                jpeg = await _to_jpeg(photo_bytes)
+                await message.answer_document(
+                    BufferedInputFile(jpeg, filename="Nastya_Red_Fox_" + draft_id + ".jpg"),
+                    caption="🖼 Фото для ручної публікації Instagram. Чернетка " + draft_id +
+                            ". Це лише завантаження JPEG, нічого не опубліковано.",
+                )
+                await message.answer(
+                    "📋 Готовий англійський підпис для копіювання:\\n\\n"
+                    + item["caption"] +
+                    "\\n\\nℹ️ Український переклад лише для тебе:\\n"
+                    + (translate_editorial_caption(item["caption"]) or "Переклад не збережений.") +
+                    "\\n\\nInstagram у браузері: https://www.instagram.com/ "
+                    "→ Створити допис → вибрати JPEG → вставити англійський текст. "
+                    "Чернетка Міссі не змінена.",
+                )
+                log.info("INSTAGRAM_DRAFT_EXPORTED owner_only draft=%s", draft_id)
+            except Exception as exc:
+                log.warning("INSTAGRAM_DRAFT_EXPORT_FAILED reason=%s", type(exc).__name__)
+                await message.answer("Не вдалося підготувати файл з архіву. Чернетка не змінена.")
         elif action.startswith("reopenask:"):
             draft_id = action.partition(":")[2]
             if not __import__("re").fullmatch(r"[a-f0-9]{8}", draft_id):
@@ -655,6 +701,11 @@ def install_instagram_menu(dp, bot, admin_username, read_memory, change_memory, 
                 for key, item in items[-10:]:
                     lines.append(f"{key}: {item.get('status', '?')} — {item.get('due_at', '?')}")
                     if item.get("photo_owner_id") == str(query.from_user.id):
+                        if item.get("status") in ("draft", "approved", "publishing") and item.get("photo_archive_id"):
+                            buttons.append([InlineKeyboardButton(
+                                text="📦 Отримати JPEG і підпис · " + key,
+                                callback_data="igmenu:exportdraft:" + key,
+                            )])
                         if item.get("status") in ("approved", "publishing") and item.get("photo_archive_id"):
                             buttons.append([InlineKeyboardButton(
                                 text="🔍 Перевірити доступ до фото · " + key,
