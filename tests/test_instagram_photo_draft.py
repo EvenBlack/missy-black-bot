@@ -202,7 +202,8 @@ async def test_owner_can_reopen_only_failed_photo_after_confirming_absence(monke
 
 
 @pytest.mark.asyncio
-async def test_denied_meta_profile_never_calls_publisher_or_locks_draft(monkeypatch):
+async def test_denied_profile_read_does_not_block_owner_approved_media_post(monkeypatch):
+    """Profile read access and media-publish access are separate permissions."""
     from instagram_growth import publish_one_now
     monkeypatch.setenv("META_TOKEN_ENCRYPTION_KEY", "1"*64)
     monkeypatch.setenv("INSTAGRAM_ACCOUNT_ID", "178999888777")
@@ -216,9 +217,12 @@ async def test_denied_meta_profile_never_calls_publisher_or_locks_draft(monkeypa
     async def ok_jpeg(_url):
         return {"ok": True, "http": 200}
     async def denied_meta(_account):
-        return {"ok": False, "reason": "meta_denied", "code": "200"}
-    async def forbidden_publish(*_args):
-        raise AssertionError("no Meta publishing request allowed")
-    with pytest.raises(RuntimeError, match="погодження збережене"):
-        await publish_one_now(read, change, key, 1234, forbidden_publish, ok_jpeg, denied_meta)
-    assert state["instagram_publish_queue"][key]["status"] == "approved"
+        raise AssertionError("Profile read diagnostic must not be required")
+    calls = []
+    async def allowed_publish(url, caption, account):
+        calls.append((url, caption, account))
+        return "media-123"
+    result = await publish_one_now(read, change, key, 1234, allowed_publish, ok_jpeg, denied_meta)
+    assert result == "media-123"
+    assert state["instagram_publish_queue"][key]["status"] == "published"
+    assert len(calls) == 1
