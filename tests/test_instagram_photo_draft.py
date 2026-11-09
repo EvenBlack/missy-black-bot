@@ -171,3 +171,27 @@ async def test_inaccessible_jpeg_blocks_meta_without_locking_approved_draft(monk
     with pytest.raises(RuntimeError, match="погодження збережене"):
         await publish_one_now(read, change, key, 1234, forbidden_publish, fail_preflight)
     assert state["instagram_publish_queue"][key]["status"] == "approved"
+
+
+@pytest.mark.asyncio
+async def test_owner_can_reopen_only_failed_photo_after_confirming_absence(monkeypatch):
+    from instagram_growth import reopen_failed_photo_draft
+    monkeypatch.setenv("META_TOKEN_ENCRYPTION_KEY", "1" * 64)
+    state = {}
+    async def read():
+        return copy.deepcopy(state)
+    async def change(fn):
+        fn(state)
+    key = await add_photo_draft(change, "a" * 24, 1234, "Cozy night")
+    await approve_draft(change, read, key)
+    with pytest.raises(ValueError):
+        await reopen_failed_photo_draft(change, read, key, 1234)
+    state["instagram_publish_queue"][key]["status"] = "publishing"
+    with pytest.raises(ValueError):
+        await reopen_failed_photo_draft(change, read, key, 9999)
+    assert state["instagram_publish_queue"][key]["status"] == "publishing"
+    assert await reopen_failed_photo_draft(change, read, key, 1234) is True
+    assert state["instagram_publish_queue"][key]["status"] == "approved"
+    assert "owner_confirmed_absent_at" in state["instagram_publish_queue"][key]
+    with pytest.raises(ValueError):
+        await reopen_failed_photo_draft(change, read, key, 1234)
